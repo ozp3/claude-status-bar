@@ -35,10 +35,19 @@ final class StatusController: NSObject, NSMenuDelegate {
     // Animation styles. `web` = the captured claude.ai morph (default). `code` = a
     // placeholder glyph spinner for the Claude Code terminal look, to be matched to
     // the real cadence from a screen recording.
-    enum AnimStyle: String { case web, code }
+    enum AnimStyle: String { case web, code, crab }
     var animStyle: AnimStyle = .web
     var showTimer = true
     var iconSystem = false // false = brand Orange; true = adaptive black/white (template image)
+    var playCompletionSound = false // chime when a turn longer than ~1 min finishes
+    lazy var completionSound: NSSound? = {
+        guard let p = Bundle.main.path(forResource: "completion", ofType: "mp3"),
+              let s = NSSound(contentsOfFile: p, byReference: true) else { return nil }
+        s.volume = 0.7 // the clip is loud at full system volume; play it a bit softer
+        return s
+    }()
+    var prevEff = ""               // last effective state, for detecting turn completion
+    var lastTurnStart: Double = 0  // active turn's start time, for the 1-minute gate
     var iconColor: NSColor? { iconSystem ? nil : brand } // nil => render as an adaptive template
     // Claude Code spinner: forward loop through the 6 glyphs, each with its own peak
     // size (so the pulse matches the video), and a size-down / swap / size-up tween at
@@ -49,14 +58,30 @@ final class StatusController: NSObject, NSMenuDelegate {
     let codeSub = 18            // sub-frames per glyph (tween smoothness)
     let codeCycle: Double = 3.8 // seconds for the full loop (lower = faster)
     lazy var codeGlyphMasks: [NSImage] = codeGlyphs.map { StatusController.glyphMask($0) }
-    var fps: Double { animStyle == .web ? spriteFPS : Double(codeGlyphs.count * codeSub) / codeCycle }
-    var frameCount: Int { animStyle == .web ? max(1, frames.count) : codeGlyphs.count * codeSub }
+    // Claude Code Crab: full-color pixel-art walk cycle baked from Clawd-CrabWalking.gif.
+    let crabFPS: Double = 12.5 // matches the source GIF's 0.08s frame delay
+    lazy var crabFrames: [NSImage] = StatusController.decodePNGs(clawdCrabFramePNGs)
+    var fps: Double {
+        switch animStyle {
+        case .web: return spriteFPS
+        case .code: return Double(codeGlyphs.count * codeSub) / codeCycle
+        case .crab: return crabFPS
+        }
+    }
+    var frameCount: Int {
+        switch animStyle {
+        case .web: return max(1, frames.count)
+        case .code: return codeGlyphs.count * codeSub
+        case .crab: return max(1, crabFrames.count)
+        }
+    }
 
     override init() {
         super.init()
         let d = UserDefaults.standard
         if d.object(forKey: "showTimer") != nil { showTimer = d.bool(forKey: "showTimer") }
         if d.object(forKey: "iconSystem") != nil { iconSystem = d.bool(forKey: "iconSystem") }
+        if d.object(forKey: "completionSound") != nil { playCompletionSound = d.bool(forKey: "completionSound") }
         if let s = d.string(forKey: "animStyle"), let st = AnimStyle(rawValue: s) { animStyle = st }
         let menu = NSMenu()
         menu.delegate = self
@@ -67,6 +92,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         pollTimer = t
         tick()
         ensureHooksInstalled()
+        checkForUpdate()
     }
 
     // Wire up the Claude Code hooks ourselves by running the bundled installer, so the
@@ -88,23 +114,73 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
     }
 
+    // MARK: update check
+
+    var currentVersion: String { (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0" }
+    let releaseAPIURL = "https://api.github.com/repos/m1ckc3s/claude-status-bar/releases/latest"
+    let releasePageURL = "https://github.com/m1ckc3s/claude-status-bar/releases/latest"
+
+    // Once a day, ask GitHub for the latest release tag and cache it. The user's IP reaches
+    // GitHub (same as downloading the app), but nothing is sent to us — no server, no logging.
+    // The menu reads the cached result; "Update available" just opens the release page.
+    func checkForUpdate() {
+        let d = UserDefaults.standard
+        let now = Date().timeIntervalSince1970
+        if now - d.double(forKey: "lastUpdateCheck") < 86400 { return }
+        guard let url = URL(string: releaseAPIURL) else { return }
+        var req = URLRequest(url: url)
+        req.setValue("ClaudeStatusBar", forHTTPHeaderField: "User-Agent") // GitHub API requires a UA
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            guard let data = data,
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tag = obj["tag_name"] as? String else { return }
+            let ver = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+            UserDefaults.standard.set(ver, forKey: "latestVersion")
+            UserDefaults.standard.set(now, forKey: "lastUpdateCheck")
+        }.resume()
+    }
+
+    // Numeric component-wise compare so "0.0.10" > "0.0.9".
+    func versionIsNewer(_ a: String, than b: String) -> Bool {
+        let pa = a.split(separator: ".").map { Int($0) ?? 0 }
+        let pb = b.split(separator: ".").map { Int($0) ?? 0 }
+        for i in 0..<max(pa.count, pb.count) {
+            let x = i < pa.count ? pa[i] : 0, y = i < pb.count ? pb[i] : 0
+            if x != y { return x > y }
+        }
+        return false
+    }
+
+    @objc func openLatestRelease() {
+        if let url = URL(string: releasePageURL) { NSWorkspace.shared.open(url) }
+    }
+
     // MARK: menu
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        checkForUpdate() // refreshes the update cache for next open (gated to once a day)
 
         let openItem = NSMenuItem(title: "Open Claude", action: #selector(openClaude), keyEquivalent: "")
         openItem.target = self
         menu.addItem(openItem)
         menu.addItem(.separator())
+        menu.addItem(header("Options"))
 
         let timerItem = NSMenuItem(title: "Show timer", action: #selector(toggleTimer), keyEquivalent: "")
         timerItem.target = self
         timerItem.state = showTimer ? .on : .off
         menu.addItem(timerItem)
 
+        let soundItem = NSMenuItem(title: "Play Completion Sound", action: #selector(toggleSound), keyEquivalent: "")
+        soundItem.target = self
+        soundItem.state = playCompletionSound ? .on : .off
+        if #available(macOS 14.0, *) { soundItem.badge = NSMenuItemBadge(string: "1m+") }
+        menu.addItem(soundItem)
+
         menu.addItem(.separator())
-        for (style, name) in [(AnimStyle.web, "Claude Style"), (AnimStyle.code, "Claude Code Style")] {
+        menu.addItem(header("Animation"))
+        for (style, name) in [(AnimStyle.web, "Claude"), (AnimStyle.code, "Claude Code"), (AnimStyle.crab, "Crab Walking")] {
             let it = NSMenuItem(title: name, action: #selector(chooseStyle(_:)), keyEquivalent: "")
             it.target = self
             it.representedObject = style.rawValue
@@ -113,6 +189,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        menu.addItem(header("Color"))
         for (sys, name) in [(false, "Orange"), (true, "System")] {
             let it = NSMenuItem(title: name, action: #selector(chooseColor(_:)), keyEquivalent: "")
             it.target = self
@@ -122,9 +199,25 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        // Version (gray, non-clickable) + an "Update available" link only when GitHub has a
+        // newer release. Up to date = just the version line, nothing extra.
+        menu.addItem(NSMenuItem(title: "Version \(currentVersion)", action: nil, keyEquivalent: ""))
+        if let latest = UserDefaults.standard.string(forKey: "latestVersion"), versionIsNewer(latest, than: currentVersion) {
+            let up = NSMenuItem(title: "Update available", action: #selector(openLatestRelease), keyEquivalent: "")
+            up.target = self
+            menu.addItem(up)
+        }
         let q = NSMenuItem(title: "Quit Claude Status Bar", action: #selector(quit), keyEquivalent: "q")
         q.target = self
         menu.addItem(q)
+    }
+
+    // A gray section-header item: native style on macOS 14+, plain disabled item below that.
+    func header(_ title: String) -> NSMenuItem {
+        if #available(macOS 14.0, *) { return NSMenuItem.sectionHeader(title: title) }
+        let it = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        it.isEnabled = false
+        return it
     }
 
     @objc func quit() { NSApp.terminate(nil) }
@@ -140,6 +233,11 @@ final class StatusController: NSObject, NSMenuDelegate {
         showTimer.toggle()
         UserDefaults.standard.set(showTimer, forKey: "showTimer")
         applyTitle()
+    }
+
+    @objc func toggleSound() {
+        playCompletionSound.toggle()
+        UserDefaults.standard.set(playCompletionSound, forKey: "completionSound")
     }
 
     @objc func chooseColor(_ sender: NSMenuItem) {
@@ -196,6 +294,16 @@ final class StatusController: NSObject, NSMenuDelegate {
                 eff = "idle"; label = ""
             }
         }
+
+        // Completion chime: track the active turn's start, and when a turn that ran longer
+        // than a minute finishes (transitions to "done"), play the sound once.
+        if (eff == "thinking" || eff == "tool"), started > 0 { lastTurnStart = started }
+        if eff == "done", prevEff != "done", playCompletionSound,
+           lastTurnStart > 0, Date().timeIntervalSince1970 - lastTurnStart >= 60 {
+            completionSound?.play()
+        }
+        if eff == "done" { lastTurnStart = 0 }
+        prevEff = eff
 
         switch eff {
         case "thinking":  render(label: label.isEmpty ? "Thinking…" : label, color: iconColor, animate: true,  startedAt: started)
@@ -313,6 +421,7 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     func iconImage(color: NSColor?, frame: Int) -> NSImage {
         if animStyle == .web { return tint(frames, color: color, frame: frame) }
+        if animStyle == .crab { return crabIcon(frame: frame) }
         // Claude Code: which glyph + how big right now.
         let i = (frame / codeSub) % codeGlyphs.count
         let local = (CGFloat(frame % codeSub) + 0.5) / CGFloat(codeSub) // 0…1 within this glyph
@@ -378,7 +487,27 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     // The resting icon is always the official Claude logo, regardless of style.
     let logoSet: [NSImage] = Data(base64Encoded: claudeLogoPNG).flatMap(NSImage.init(data:)).map { [$0] } ?? []
-    func restingIcon(color: NSColor?) -> NSImage { tint(logoSet.isEmpty ? frames : logoSet, color: color, frame: 0) }
+    func restingIcon(color: NSColor?) -> NSImage {
+        if animStyle == .crab { return crabIcon(frame: 0) }
+        return tint(logoSet.isEmpty ? frames : logoSet, color: color, frame: 0)
+    }
+
+    // Full-color crab frame scaled to the menu-bar height. Not tinted (it's a colored
+    // character), so the Orange/System setting doesn't affect this style.
+    func crabIcon(frame: Int) -> NSImage {
+        guard !crabFrames.isEmpty else { return NSImage(size: NSSize(width: 18, height: 18)) }
+        let src = crabFrames[frame % crabFrames.count]
+        let rep = src.representations.first
+        let pw = CGFloat(rep?.pixelsWide ?? Int(src.size.width))
+        let ph = CGFloat(rep?.pixelsHigh ?? Int(src.size.height))
+        let h: CGFloat = 18, w = (ph > 0 ? h * (pw / ph) : h)
+        let img = NSImage(size: NSSize(width: w, height: h), flipped: false) { rect in
+            src.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
+            return true
+        }
+        img.isTemplate = false
+        return img
+    }
 
     // A small filled dot — used for the paused "awaiting permission" state.
     func dotIcon(color: NSColor?) -> NSImage {

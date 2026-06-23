@@ -1,14 +1,26 @@
+<div align="center">
+
 # Claude Status Bar
 
 A tiny macOS menu bar app that shows **Claude Code's live status**: an animated Claude spark while it's thinking or running a tool, a yellow dot when it's awaiting your permission, and the elapsed time of the current turn. It sits next to your battery/clock and stays out of the way, no window, no dock icon, no usage dashboards.
 
-> Built so you can tab away during a long "thinking" stretch and still see, at a glance, whether Claude is working, waiting on you, or done.
+_Built so you can tab away during a long "thinking" stretch and still see, at a glance, whether Claude is working, waiting on you, or done._
 
-<img width="1016" height="566" alt="for gif (1)" src="https://github.com/user-attachments/assets/55a7b294-e893-4f73-b16b-b8beef784400" />
+<br>
+
+<img width="1016" height="566" alt="Claude Status Bar demo" src="https://github.com/user-attachments/assets/55a7b294-e893-4f73-b16b-b8beef784400" />
+
+<br><br>
 
 <a href="https://github.com/m1ckc3s/claude-status-bar/releases/latest/download/ClaudeStatusBar.dmg"><img src="assets/download.png" alt="Download ClaudeStatusBar.dmg for macOS" width="260"></a>
 
+<br>
+
 Signed and notarized. Open it, drag the app to Applications, launch once. See [Install](#install) for details.
+
+</div>
+
+---
 
 ## What it shows
 
@@ -17,7 +29,16 @@ Signed and notarized. Open it, drag the app to Applications, launch once. See [I
 - **Awaiting permission** — a paused yellow dot (CLI only, see below).
 - **Idle / done** — rests on the Claude logo.
 
-Two animation styles (pick in the menu): **Claude** (the web "morph" spark) and **Claude Code** (the terminal glyph spinner). Icon color can be **Orange** (Anthropic's `#d97757`) or **System** (adaptive black/white, like your other menu bar icons). The elapsed timer can be toggled off.
+Everything is controlled from the menu (click the icon):
+
+- **Show timer:** toggle the elapsed `1m 1s` clock.
+- **Play completion sound:** a soft chime when a turn longer than a minute finishes (off by default).
+- **Animation style:**
+  - **Claude**, the web "morph" spark
+  - **Claude Code**, the terminal glyph spinner
+  - **Crab Walking**, a pixel-art Clawd crab that scuttles while Claude works
+- **Icon color:** **Orange** or **System** (adaptive black/white). The Claude and Claude Code styles follow this setting; Crab Walking is always its orange pixel-art self.
+- **Version and update:** the menu shows your current version, with a one-click "Update available" when a newer release exists.
 
 ## Where it works
 
@@ -82,6 +103,10 @@ Claude Code fires hooks on its lifecycle and tool events. Small scripts write th
 
 The installer merges its hooks into `~/.claude/settings.json` without touching your existing hooks, and backs the file up first (`settings.json.bak-statusbar`).
 
+## Privacy
+
+Claude Status Bar collects no data and has no servers. It runs entirely on your Mac. Its one network call is a once-a-day check to GitHub's public API for the latest release tag, used only to show "Update available" in the menu. Nothing is sent to the developer (as with any update check or download, GitHub sees the request; the developer never does).
+
 ## Uninstall
 
 ```bash
@@ -112,6 +137,15 @@ Requires the Xcode Command Line Tools (`xcode-select --install`).
 **It's running but I can't see it.** On a Mac with a notch, a crowded menu bar can hide icons behind the notch. Remove some other menu bar items, or use a menu bar manager (Ice, Bartender), to reveal it.
 
 **Uninstalling.** See [Uninstall](#uninstall) above. Dragging the app to the Trash alone leaves the hooks behind, so run the uninstall command first.
+
+## Roadmap
+
+Planned or under consideration:
+
+- **Multi-session view.** When several Claude Code sessions run at once, summarize them in one icon (priority-based) and list each session, with its own status and timer, when you click the menu.
+- More animation styles.
+
+Got a request? [Open an issue](../../issues).
 
 ## Trademark / not affiliated
 

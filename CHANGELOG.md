@@ -3,6 +3,14 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.0] - 2026-06-22
+
+### Added
+- **Crab Walking** animation style: a pixel-art Clawd crab that scuttles in the menu bar while Claude works. Pick it under Animation. It's always its orange pixel-art self (the Claude and Claude Code styles still follow the Orange/System color setting).
+- Optional **completion sound**: a soft chime when a turn longer than a minute finishes. Off by default, toggle it under Options.
+- **Version and update check** in the menu: shows your current version, plus a one-click "Update available" that opens the latest release when there's a newer one. The check is a once-a-day read of GitHub's public release tag; no data is collected and nothing is sent to the developer.
+- Menu **section headers** (Options / Animation / Color) for easier navigation.
+
 ## [0.0.5] - 2026-06-22
 
 ### Fixed
@@ -49,6 +57,7 @@ All notable changes to Claude Status Bar are documented here. This project follo
 - Signed and notarized DMG so it opens without a Gatekeeper warning.
 - Claude Code plugin marketplace manifest for the plugin install path.
 
+[0.1.0]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.1.0
 [0.0.5]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.0.5
 [0.0.4]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.0.4
 [0.0.3]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.0.3
