@@ -12,8 +12,8 @@ _Built so you can tab away during a long "thinking" stretch and still see, at a 
 
 Signed and notarized. Open it, drag the app to Applications, launch once.
 
-<img width="1016" height="566" alt="Claude Status Bar demo" src="https://github.com/user-attachments/assets/55a7b294-e893-4f73-b16b-b8beef784400" />
-<img width="656" height="883" alt="Screenshot 2026-06-25 at 5 27 42 AM" src="https://github.com/user-attachments/assets/7a164fda-ea23-434f-a13a-18ad7bcb1b25" />
+<img width="813" height="453" alt="Claude Status Bar demo" src="https://github.com/user-attachments/assets/55a7b294-e893-4f73-b16b-b8beef784400" />
+<img width="459" height="618" alt="Screenshot 2026-06-25 at 5 27 42 AM" src="https://github.com/user-attachments/assets/7a164fda-ea23-434f-a13a-18ad7bcb1b25" />
 
 ---
 
