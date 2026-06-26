@@ -5,9 +5,10 @@ import Cocoa
 // "on" color explicitly. Layer-hosted so the knob can slide on Apple's switch spring (CASpringAnimation),
 // with the track color crossfading; CA animations run in the render server, so they play during menu tracking.
 final class ToggleView: NSView {
-    static let w: CGFloat = 28, h: CGFloat = 16
+    static let w: CGFloat = 33, h: CGFloat = 16
     private let track = CALayer()
     private let knob = CALayer()
+    private var lastToggle = Date.distantPast   // debounce: ignore a re-click within a short window
     var isOn: Bool { didSet { updateState(animated: true) } }
     var onToggle: ((Bool) -> Void)?
 
@@ -43,7 +44,7 @@ final class ToggleView: NSView {
             let spring = CASpringAnimation(keyPath: "position")
             spring.fromValue = NSValue(point: knob.presentation()?.position ?? knob.position)
             spring.toValue = NSValue(point: toPos)
-            spring.damping = 15; spring.stiffness = 180; spring.mass = 1; spring.initialVelocity = 0
+            spring.damping = 16; spring.stiffness = 260; spring.mass = 1; spring.initialVelocity = 0
             spring.duration = spring.settlingDuration
             knob.add(spring, forKey: "position")
             let col = CABasicAnimation(keyPath: "backgroundColor")
@@ -58,9 +59,107 @@ final class ToggleView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard Date().timeIntervalSince(lastToggle) > 0.1 else { return }
+        lastToggle = Date()
         isOn.toggle()
         onToggle?(isOn)
     }
+}
+
+// A session row as a custom view so a flexible spacer can pin the timer + pill to the true trailing
+// edge (a plain menu-item title can't cross the menu's reserved shortcut/submenu-arrow column).
+// Layout: [icon] name  <spacer>  timer  [pill], with timer+pill pinned right via autoresizing.
+final class SessionRowView: NSView {
+    let id: String
+    var onClick: (() -> Void)?
+    private let iconView = NSImageView()
+    private let nameField = NSTextField(labelWithString: "")
+    private let timerField = NSTextField(labelWithString: "")
+    private let pillView = NSImageView()
+    private let pad: CGFloat = 14, iconSize: CGFloat = 16, rowH: CGFloat = 24, timerW: CGFloat = 74
+    private let highlightView = NSVisualEffectView()  // system selection material = exact native highlight
+    private var hovered = false
+    private var iconBaseTint: NSColor?       // tint when not hovered (template icons); white on hover
+    private var pillNormal: NSImage?, pillSelected: NSImage?
+
+    init(id: String, width: CGFloat) {
+        self.id = id
+        super.init(frame: NSRect(x: 0, y: 0, width: width, height: rowH))
+        autoresizingMask = [.width]
+        highlightView.material = .selection
+        highlightView.state = .active
+        highlightView.isEmphasized = true
+        highlightView.wantsLayer = true
+        highlightView.layer?.cornerRadius = 5
+        highlightView.isHidden = true
+        addSubview(highlightView)
+        iconView.frame = NSRect(x: pad, y: (rowH - iconSize) / 2, width: iconSize, height: iconSize)
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        iconView.autoresizingMask = [.maxXMargin]
+        addSubview(iconView)
+        nameField.font = .menuFont(ofSize: 0)
+        nameField.textColor = .labelColor
+        nameField.lineBreakMode = .byTruncatingTail
+        nameField.frame = NSRect(x: pad + iconSize + 8, y: (rowH - 16) / 2, width: 160, height: 16)
+        nameField.autoresizingMask = [.maxXMargin]
+        addSubview(nameField)
+        timerField.font = NSFont.monospacedSystemFont(ofSize: NSFont.menuFont(ofSize: 0).pointSize, weight: .regular)
+        timerField.textColor = .secondaryLabelColor
+        timerField.alignment = .right
+        timerField.autoresizingMask = [.minXMargin]
+        addSubview(timerField)
+        pillView.imageScaling = .scaleNone
+        pillView.autoresizingMask = [.minXMargin]
+        addSubview(pillView)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func setIcon(_ img: NSImage?) { iconView.image = img }
+
+    func configure(icon: NSImage?, iconTint: NSColor?, name: String, timer: String?,
+                   pillNormal: NSImage?, pillSelected: NSImage?, pillInset: CGFloat, timerGap: CGFloat) {
+        let w = bounds.width
+        iconView.image = icon
+        iconBaseTint = iconTint
+        iconView.contentTintColor = hovered ? .white : iconTint
+        nameField.stringValue = name
+        self.pillNormal = pillNormal; self.pillSelected = pillSelected
+        let pill = hovered ? pillSelected : pillNormal
+        var pillLeft = w - pillInset
+        if let pill = pill {
+            pillView.isHidden = false
+            pillView.image = pill
+            pillView.frame = NSRect(x: w - pillInset - pill.size.width, y: (rowH - pill.size.height) / 2,
+                                    width: pill.size.width, height: pill.size.height)
+            pillLeft = pillView.frame.minX
+        } else { pillView.isHidden = true }
+        if let timer = timer {
+            timerField.isHidden = false
+            timerField.stringValue = timer
+            timerField.frame = NSRect(x: pillLeft - timerGap - timerW, y: (rowH - 16) / 2, width: timerW, height: 16)
+        } else { timerField.isHidden = true }
+    }
+    // Custom views don't get the menu's automatic hover highlight, so draw it ourselves.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+    override func mouseEntered(with event: NSEvent) { setHover(true) }
+    override func mouseExited(with event: NSEvent) { setHover(false) }
+    private func setHover(_ h: Bool) {
+        hovered = h
+        highlightView.isHidden = !h
+        nameField.textColor = h ? .white : .labelColor
+        timerField.textColor = h ? .white : .secondaryLabelColor
+        iconView.contentTintColor = h ? .white : iconBaseTint
+        if !pillView.isHidden { pillView.image = h ? pillSelected : pillNormal }
+    }
+    override func layout() {
+        super.layout()
+        highlightView.frame = bounds.insetBy(dx: 5, dy: 0)
+    }
+    override func mouseDown(with event: NSEvent) { onClick?() }
 }
 
 final class StatusController: NSObject, NSMenuDelegate {
@@ -78,7 +177,9 @@ final class StatusController: NSObject, NSMenuDelegate {
     var notNeededSince: Date?
     let launchGrace: TimeInterval = 5   // settle time after launch before we may quit
     let idleQuitDelay: TimeInterval = 3 // "not needed" must persist this long before quitting
-    let stalePruneAge: TimeInterval = 1800 // drop a resting session from the list after 30 min quiet
+    // "Hide idle after" setting (seconds): drop a resting session from the list once it's been quiet
+    // this long. 0 = Never. Defaults to 30 min.
+    var stalePruneAge: TimeInterval { UserDefaults.standard.object(forKey: "hideIdleAfter") as? Double ?? 1800 }
 
     // One parsed entry per live session file (state.d/<id>.json), refreshed each tick.
     struct Session {
@@ -286,9 +387,9 @@ final class StatusController: NSObject, NSMenuDelegate {
         guard let img = rotatedSpinner(spinAngle) else { return }
         let now = Date().timeIntervalSince1970
         for (item, id) in sessionMenuItems {
-            guard let s = sessions[id] else { continue }
+            guard let s = sessions[id], let v = item.view as? SessionRowView else { continue }
             let eff = s.eff.isEmpty ? effectiveState(s, now: now) : s.eff
-            if eff == "thinking" || eff == "tool" { item.image = img }
+            if eff == "thinking" || eff == "tool" { v.setIcon(img) }
         }
     }
 
@@ -298,10 +399,9 @@ final class StatusController: NSObject, NSMenuDelegate {
     func refreshOpenMenuRows() {
         let now = Date().timeIntervalSince1970
         for (item, id) in sessionMenuItems {
-            guard let s = sessions[id] else { continue }
+            guard let s = sessions[id], let v = item.view as? SessionRowView else { continue }
             let eff = s.eff.isEmpty ? effectiveState(s, now: now) : s.eff
-            item.attributedTitle = sessionMenuAttributed(s)
-            item.image = sessionSymbol(s, eff: eff)
+            configureSessionRow(v, s, eff: eff)
         }
     }
 
@@ -313,16 +413,13 @@ final class StatusController: NSObject, NSMenuDelegate {
         if !sessions.isEmpty {
             menu.addItem(header("Sessions"))
             for s in sessions.values.sorted(by: { $0.ts > $1.ts }) {
-                let it = NSMenuItem(title: "", action: #selector(openClaude), keyEquivalent: "")
-                it.target = self
-                it.representedObject = s.id
-                it.attributedTitle = sessionMenuAttributed(s)
                 let now = Date().timeIntervalSince1970
-                it.image = sessionSymbol(s, eff: s.eff.isEmpty ? effectiveState(s, now: now) : s.eff)
-                if #available(macOS 14.0, *) {
-                    let tag = surfaceTag(s.entrypoint)
-                    if !tag.isEmpty { it.badge = NSMenuItemBadge(string: tag) }
-                }
+                let eff = s.eff.isEmpty ? effectiveState(s, now: now) : s.eff
+                let view = SessionRowView(id: s.id, width: CGFloat(uiConfig()["boxWidth"] ?? 300))
+                view.onClick = { [weak self] in menu.cancelTracking(); self?.openClaude() }
+                configureSessionRow(view, s, eff: eff)
+                let it = NSMenuItem()
+                it.view = view
                 menu.addItem(it)
                 sessionMenuItems.append((it, s.id))  // kept so tick() can live-update the timers
             }
@@ -355,7 +452,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         animParent.submenu = animSub
         menu.addItem(animParent)
 
-        let colorParent = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
+        let colorParent = NSMenuItem(title: "Color theme", action: nil, keyEquivalent: "")
         let colorSub = NSMenu()
         for (sys, name) in [(false, "Orange"), (true, "System")] {
             let it = NSMenuItem(title: name, action: #selector(chooseColor(_:)), keyEquivalent: "")
@@ -366,6 +463,19 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
         colorParent.submenu = colorSub
         menu.addItem(colorParent)
+
+        let hideParent = NSMenuItem(title: "Hide idle sessions", action: nil, keyEquivalent: "")
+        let hideSub = NSMenu()
+        let curHide = stalePruneAge
+        for (name, secs) in [("5 minutes", 300.0), ("15 minutes", 900.0), ("30 minutes", 1800.0), ("1 hour", 3600.0), ("Never", 0.0)] {
+            let it = NSMenuItem(title: name, action: #selector(chooseHideIdle(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = secs
+            it.state = curHide == secs ? .on : .off
+            hideSub.addItem(it)
+        }
+        hideParent.submenu = hideSub
+        menu.addItem(hideParent)
 
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Version \(currentVersion)", action: nil, keyEquivalent: ""))
@@ -392,7 +502,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     // stretches the view to its full width; the switch gets a non-vibrant appearance so its "on"
     // accent fill isn't washed out by the menu's vibrancy.
     func toggleRow(title: String, isOn: Bool, onToggle: @escaping (Bool) -> Void) -> NSMenuItem {
-        let width: CGFloat = 280, height: CGFloat = 22, leftInset: CGFloat = 14, rightInset: CGFloat = 12
+        let width = CGFloat(uiConfig()["boxWidth"] ?? 300), height: CGFloat = 24, leftInset: CGFloat = 14, rightInset: CGFloat = 12
         let row = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
         row.autoresizingMask = [.width]
 
@@ -429,17 +539,30 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     // Same as sessionMenuLine but the trailing timer is dimmed so it reads apart from the project name.
-    func sessionMenuAttributed(_ s: Session) -> NSAttributedString {
+    // Live layout knobs read fresh from ~/.claude/statusbar/uiconfig.json each render, so numeric
+    // tweaks (timer column, pill offset, gap) take effect on the next menu open with NO rebuild.
+    func uiConfig() -> [String: Double] {
+        let p = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/uiconfig.json")
+        guard let d = FileManager.default.contents(atPath: p),
+              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return [:] }
+        return j.compactMapValues { ($0 as? NSNumber)?.doubleValue }
+    }
+
+    func configureSessionRow(_ v: SessionRowView, _ s: Session, eff: String) {
+        let cfg = uiConfig()
         let now = Date().timeIntervalSince1970
-        let eff = s.eff.isEmpty ? effectiveState(s, now: now) : s.eff
-        let font = NSFont.menuFont(ofSize: 0)
-        let str = NSMutableAttributedString(string: truncated(sessionName(s)),
-                                            attributes: [.font: font, .foregroundColor: NSColor.labelColor])
-        if eff == "thinking" || eff == "tool", s.startedAt > 0 {
-            str.append(NSAttributedString(string: "  " + elapsed(max(0, Int(now - s.startedAt))),
-                                          attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]))
-        }
-        return str
+        let nameMax = Int(cfg["nameMax"] ?? 16)
+        let working = (eff == "thinking" || eff == "tool") && s.startedAt > 0
+        let resting = !(eff == "permission" || eff == "thinking" || eff == "tool")  // the dim caret
+        let tag = surfaceTag(s.entrypoint)
+        v.configure(icon: sessionSymbol(s, eff: eff),
+                    iconTint: resting ? .tertiaryLabelColor : nil,  // caret dim; spinner uses default; amber ignores tint
+                    name: truncated(sessionName(s), max: nameMax, keep: nameMax),
+                    timer: working ? elapsed(max(0, Int(now - s.startedAt))) : nil,
+                    pillNormal: tag.isEmpty ? nil : pillImage(tag),
+                    pillSelected: tag.isEmpty ? nil : pillImage(tag, selected: true),
+                    pillInset: CGFloat(cfg["pillInset"] ?? 12),
+                    timerGap: CGFloat(cfg["timerGap"] ?? 10))
     }
 
     // The state portion of a session's display, shared by the bar label and the menu/tooltip rows.
@@ -457,13 +580,39 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     // CLAUDE_CODE_ENTRYPOINT -> a short all-caps badge tag.
+    // Every surface collapses to a 3-letter pill: the desktop app is APP, everything else (cli,
+    // vscode, cursor, windsurf, …) is a terminal/editor context, so CLI. Keeps pills uniform.
     func surfaceTag(_ entrypoint: String) -> String {
         switch entrypoint {
-        case "cli":                       return "CLI"
-        case "claude-desktop":            return "APP"
-        case "vscode", "vscode-insiders": return "VS CODE"
-        case "":                          return ""
-        default:                          return entrypoint.uppercased()
+        case "claude-desktop": return "APP"
+        case "":               return ""
+        default:               return "CLI"
+        }
+    }
+
+    // CLI/APP pill rendered as an image so it can sit inside the row text (right after the timer)
+    // rather than as a system badge pinned to the menu edge with a fixed, uncloseable gap.
+    func pillImage(_ text: String, selected: Bool = false) -> NSImage {
+        let t = text as NSString
+        let font = NSFont.monospacedSystemFont(ofSize: 9.5, weight: .semibold)  // mono -> 3 chars = uniform width
+        let pad: CGFloat = 7, h: CGFloat = 15
+        let cfg = uiConfig()
+        let dy = CGFloat(cfg["pillTextY"] ?? -1)  // negative nudges the text down (it reads top-heavy)
+        // Pill bg is a tunable gray per mode (black-on-light / white-on-dark at a low alpha) so light
+        // mode can be lightened independently. On a selected (blue) row it's a light translucent pill.
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let bgAlpha = CGFloat(cfg[dark ? "pillBgDark" : "pillBgLight"] ?? (dark ? 0.14 : 0.10))
+        let bg = selected ? NSColor.white.withAlphaComponent(0.22)
+                          : (dark ? NSColor.white : NSColor.black).withAlphaComponent(bgAlpha)
+        let fg = selected ? NSColor.white : NSColor.labelColor
+        let w = ceil(t.size(withAttributes: [.font: font]).width) + pad * 2
+        return NSImage(size: NSSize(width: w, height: h), flipped: false) { rect in
+            bg.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: h / 2, yRadius: h / 2).fill()
+            let a: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: fg]
+            let ts = t.size(withAttributes: a)
+            t.draw(at: NSPoint(x: (rect.width - ts.width) / 2, y: (rect.height - ts.height) / 2 + dy), withAttributes: a)
+            return true
         }
     }
 
@@ -483,12 +632,14 @@ final class StatusController: NSObject, NSMenuDelegate {
         let glyph = "\u{276F}" as NSString
         let font = NSFont.systemFont(ofSize: 11, weight: .medium)
         let side = spinnerBase?.size.width ?? 15
-        return NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
-            let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.tertiaryLabelColor]
+        let img = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
+            let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
             let g = glyph.size(withAttributes: attrs)
             glyph.draw(at: NSPoint(x: (side - g.width) / 2, y: (side - g.height) / 2), withAttributes: attrs)
             return true
         }
+        img.isTemplate = true   // tint via contentTintColor: dim (tertiary) normally, white on hover
+        return img
     }()
 
     // Pre-rendered into a padded SQUARE canvas with the glyph centered, so rotation pivots on the
@@ -576,6 +727,11 @@ final class StatusController: NSObject, NSMenuDelegate {
         evaluate() // re-render the current state in the new color
     }
 
+    @objc func chooseHideIdle(_ sender: NSMenuItem) {
+        guard let secs = sender.representedObject as? Double else { return }
+        UserDefaults.standard.set(secs, forKey: "hideIdleAfter")
+    }
+
     @objc func chooseStyle(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let st = AnimStyle(rawValue: raw) else { return }
         animStyle = st
@@ -631,7 +787,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         for id in Array(sessions.keys) {
             guard var s = sessions[id] else { continue }
             s.eff = effectiveState(s, now: now)   // compute once per tick; the menu + tooltip reuse it
-            if s.eff == "idle", now - s.ts > stalePruneAge {
+            if s.eff == "idle", stalePruneAge > 0, now - s.ts > stalePruneAge {
                 // genuinely-quiet resting session: drop it. update.js rewrites the file if it acts again.
                 try? FileManager.default.removeItem(atPath: (stateDir as NSString).appendingPathComponent(id + ".json"))
                 sessions[id] = nil; fileMTimes[id + ".json"] = nil; soundPrev[id] = nil; turnStart[id] = nil
