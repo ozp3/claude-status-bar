@@ -100,7 +100,7 @@ Then drag the app to the Trash.
 
 I built this for myself, then open-sourced it because other people might find it handy too, and I'm genuinely thrilled that so many of you do. An extra thank-you to everyone who went the extra mile and contributed code, fixes, and ideas.
 
-**[See the contributors →](docs/acknowledgements.md)**
+**[See the contributors →](ACKNOWLEDGEMENTS.md)**
 
 ## Trademark / Not Affiliated
 
