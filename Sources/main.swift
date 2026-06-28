@@ -258,6 +258,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     var showTimer = false
     var iconSystem = false // false = brand Orange; true = adaptive black/white (template image)
     var playCompletionSound = false // chime when a turn longer than ~1 min finishes
+    var exactTerminalFocus = false  // experimental: click a CLI session to focus its exact terminal tab (AppleScript, one-time macOS Automation grant)
     lazy var completionSound: NSSound? = {
         guard let p = Bundle.main.path(forResource: "completion", ofType: "mp3"),
               let s = NSSound(contentsOfFile: p, byReference: true) else { return nil }
@@ -297,6 +298,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         if d.object(forKey: "showTimer") != nil { showTimer = d.bool(forKey: "showTimer") }
         if d.object(forKey: "iconSystem") != nil { iconSystem = d.bool(forKey: "iconSystem") }
         if d.object(forKey: "completionSound") != nil { playCompletionSound = d.bool(forKey: "completionSound") }
+        if d.object(forKey: "exactTerminalFocus") != nil { exactTerminalFocus = d.bool(forKey: "exactTerminalFocus") }
         if let s = d.string(forKey: "animStyle"), let st = AnimStyle(rawValue: s) { animStyle = st }
         let menu = NSMenu()
         menu.delegate = self
@@ -403,6 +405,39 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     @objc func openLatestRelease() {
         if let url = URL(string: releasePageURL) { NSWorkspace.shared.open(url) }
+    }
+
+    // Persist the experimental toggle. Explain the macOS Automation grant on the first enable, or again
+    // after a denial (the deny handler clears exactFocusToastShown). Deferred so the menu's toggle
+    // interaction finishes before the modal alert.
+    func setExactTerminalFocus(_ on: Bool) {
+        exactTerminalFocus = on
+        UserDefaults.standard.set(on, forKey: "exactTerminalFocus")
+        guard on, !UserDefaults.standard.bool(forKey: "exactFocusToastShown") else { return }
+        UserDefaults.standard.set(true, forKey: "exactFocusToastShown")
+        DispatchQueue.main.async { [weak self] in self?.showExactFocusToast() }
+    }
+
+    // Clear this app's Apple Events automation decisions so the next AppleScript attempt re-triggers the
+    // macOS prompt (lets a re-enable recover from an earlier denial). tccutil edits the user TCC db, no sudo.
+    func resetAutomationGrant() {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        p.arguments = ["reset", "AppleEvents", Bundle.main.bundleIdentifier ?? "com.local.claudestatusbar"]
+        try? p.run()
+    }
+
+    func showExactFocusToast() {
+        let a = NSAlert()
+        a.messageText = "Exact terminal focus (experimental)"
+        a.informativeText = "When enabled, this feature allows you to focus a CLI session from the menu bar when clicked.\n\nHeads up: this will require a prompt from Apple. It's a one-time grant, and you can revoke it at any time under System Settings > Privacy & Security > Automation."
+        a.addButton(withTitle: "Got it")
+        a.addButton(withTitle: "Learn more")
+        NSApp.activate(ignoringOtherApps: true)
+        if a.runModal() == .alertSecondButtonReturn,
+           let url = URL(string: "https://github.com/m1ckc3s/claude-status-bar/issues/19") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     // MARK: menu
@@ -542,6 +577,11 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
         hideParent.submenu = hideSub
         menu.addItem(hideParent)
+
+        menu.addItem(.separator())
+        menu.addItem(toggleRow(title: "Exact terminal focus (experimental)", isOn: exactTerminalFocus) { [weak self] on in
+            self?.setExactTerminalFocus(on)
+        })
 
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Version \(currentVersion)", action: nil, keyEquivalent: ""))
@@ -789,7 +829,19 @@ final class StatusController: NSObject, NSMenuDelegate {
     // bringing the terminal app to the front, the zero-permission behavior. See issue #19.
     func openSession(_ id: String, entrypoint: String, termProgram: String, tty: String) {
         if entrypoint == "claude-desktop" { openClaude(); return }
-        if !tty.isEmpty, focusTerminalTab(termProgram: termProgram, tty: tty) { return }
+        if exactTerminalFocus, !tty.isEmpty {
+            switch focusTerminalTab(termProgram: termProgram, tty: tty) {
+            case .focused: return
+            case .denied:
+                // Grant declined: switch the toggle off, clear its state, and reset the Automation grant
+                // so a later re-enable actually re-fires the system prompt (macOS otherwise caches the
+                // deny and never asks again). Fall through to app-to-front for this click.
+                setExactTerminalFocus(false)
+                UserDefaults.standard.set(false, forKey: "exactFocusToastShown")
+                resetAutomationGrant()
+            case .fallback: break
+            }
+        }
         bringTerminalAppToFront(termProgram)
     }
 
@@ -811,11 +863,12 @@ final class StatusController: NSObject, NSMenuDelegate {
         try? p.run()
     }
 
-    // Focus the terminal window/tab whose tty matches, via AppleScript. Returns true if the script
-    // ran without error (false → unsupported terminal or the Automation grant was declined, so the
-    // caller falls back to app-to-front). The first run shows the one-time "ClaudeStatusBar wants
-    // to control Terminal" prompt; allow once and it's seamless after. Terminal.app + iTerm only.
-    func focusTerminalTab(termProgram: String, tty: String) -> Bool {
+    // Focus the terminal window/tab whose tty matches, via AppleScript. The first run shows the one-time
+    // "ClaudeStatusBar wants to control Terminal" Automation prompt (needs the apple-events entitlement,
+    // see build.sh). Terminal.app + iTerm only; anything else is .fallback. A declined grant comes back
+    // as .denied (the -1743 "not permitted" error) so the caller can switch the experimental toggle off.
+    enum FocusOutcome { case focused, denied, fallback }
+    func focusTerminalTab(termProgram: String, tty: String) -> FocusOutcome {
         let dev = tty.hasPrefix("/dev/") ? tty : "/dev/\(tty)"
         let script: String
         switch termProgram {
@@ -853,11 +906,13 @@ final class StatusController: NSObject, NSMenuDelegate {
             end tell
             """
         default:
-            return false  // unsupported terminal, use the app-to-front fallback
+            return .fallback  // unsupported terminal, use the app-to-front fallback
         }
         var err: NSDictionary?
         NSAppleScript(source: script)?.executeAndReturnError(&err)
-        return err == nil
+        guard let err = err else { return .focused }
+        let code = (err["NSAppleScriptErrorNumber"] as? Int) ?? 0
+        return code == -1743 ? .denied : .fallback   // -1743 = errAEEventNotPermitted (grant declined)
     }
 
 
