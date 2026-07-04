@@ -18,6 +18,7 @@ Also the [known issues and suggestions](https://github.com/m1ckc3s/claude-status
 - Heavy work in the hooks. They run on every event, so they write one small state file and exit: no network, no per-prompt API calls.
 - Hardcoding for one locale, provider, relay, or terminal.
 - New settings stores or dependencies for a minor feature when what's already there works.
+- Changing how your machine behaves: preventing sleep, holding power assertions, running privileged helpers, or any background action beyond showing status. The app displays state, it doesn't act on your system. (Keeping a Mac awake for agents is its own tool; [adrafinil](https://github.com/kageroumado/adrafinil) is one example.)
 
 ## Building
 
