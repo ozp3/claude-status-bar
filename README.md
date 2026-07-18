@@ -1,9 +1,17 @@
-<a href="https://github.com/m1ckc3s/claude-status-bar/releases/latest/download/ClaudeStatusBar.dmg"><img src="assets/download.png" alt="Download ClaudeStatusBar.dmg for macOS" width="220"></a>
+<a href="https://github.com/ozp3/claude-status-bar/releases/latest/download/ClaudeStatusBar.dmg"><img src="assets/download.png" alt="Download ClaudeStatusBar.dmg for macOS" width="220"></a>
 <br>
-**Signed and notarized by Apple**
+**Apple Silicon · ad-hoc signed** — see [Install](#install)
+
+> ### This is a fork
+> Forked from **[m1ckc3s/claude-status-bar](https://github.com/m1ckc3s/claude-status-bar)** (MIT, © Mick Cesanek), which is the original and the one most people want.
+>
+> It adds one thing: a **Usage** section in the dropdown showing your Claude plan's rate-limit utilization. Upstream deliberately excludes usage meters ([CONTRIBUTING](https://github.com/m1ckc3s/claude-status-bar/blob/main/CONTRIBUTING.md)), so this lives here rather than as a pull request.
+>
+> Unlike upstream, this fork is **Apple Silicon only** and **not notarized**. All credit for the app itself goes upstream; please report bugs in the status logic there, and only usage-related bugs here.
+
 ## Claude Status Bar
 
-A tiny macOS menu bar app that shows **Claude Code's live status**: an animated Claude icon while it's thinking or running a tool, a yellow dot when it's awaiting your permission, and the elapsed time of the current turn. Lightweight, no window, no dock icon, no usage dashboards.
+A tiny macOS menu bar app that shows **Claude Code's live status**: an animated Claude icon while it's thinking or running a tool, a yellow dot when it's awaiting your permission, and the elapsed time of the current turn. Lightweight, no window, no dock icon.
 
 > Built so you can tab away during a long "thinking" stretch and still see, at a glance, whether Claude is working, waiting on you, or done.
 
@@ -18,8 +26,13 @@ A tiny macOS menu bar app that shows **Claude Code's live status**: an animated 
 - **Awaiting permission** — a paused yellow dot, in both the CLI and the Desktop app.
 - **Idle / done** — rests on the Claude logo.
 
+**Usage** *(this fork)* — the dropdown also lists your plan's rate-limit utilization: the 5-hour session window, the weekly cap, and any model-scoped weekly caps, each with a bar, a percentage, and when it resets. The colour turns amber past 75% and red past 90%. The menu bar icon itself is unchanged, so this costs no space up top.
+
+Fetched from Anthropic's `/api/oauth/usage` — the same endpoint the Claude UI reads — when the app launches and when you open the menu, never on a background timer ([privacy details](PRIVACY.md)).
+
 Everything is controlled from the menu:
 
+- **Show usage:** toggle the usage section (off = no usage requests at all).
 - **Show timer:** toggle the elapsed `1m 1s` clock.
 - **Thinking words:** rotate a playful verb (`Manifesting…`, `Percolating…`) in place of `Thinking…`, like Claude Code (on by default).
 - **Animation style:**
@@ -44,14 +57,21 @@ Everything is controlled from the menu:
 
 ### DMG
 
-Signed and notarized.
-
 1. Download the latest `ClaudeStatusBar.dmg` from [Releases](../../releases).
 2. Open it and drag **Claude Status Bar** into Applications.
-3. Launch it once. On first launch it wires up the Claude Code hooks for you automatically.
-4. Start a new Claude Code session, the icon appears whenever Claude Code is running.
+3. **Right-click the app → Open → Open.** Double-clicking will fail the first time (see below).
+4. On first launch it wires up the Claude Code hooks for you automatically.
+5. Start a new Claude Code session, the icon appears whenever Claude Code is running.
 
-> **Official `brew install` coming soon.**
+> [!IMPORTANT]
+> **"Apple could not verify..." on first open.** This build is ad-hoc signed, not notarized —
+> notarizing requires a paid Apple Developer account. macOS quarantines anything downloaded
+> from the internet, so Gatekeeper blocks it until you approve it once via **right-click → Open**
+> (double-click gives you no "Open anyway" button; right-click does). After that it launches
+> normally forever. Upstream's builds *are* notarized and open with a double-click.
+
+> **Apple Silicon only.** This fork builds arm64 only; it will not run on Intel Macs.
+> Upstream ships a universal binary.
 
 ### Updating
 
@@ -62,15 +82,16 @@ Download the latest DMG and drag it into Applications (choose **Replace**). That
 
 ## Requirements
 
-- macOS 12+
-- [Claude Code](https://claude.com/claude-code) (CLI or the Desktop app)
+- macOS 12+ on **Apple Silicon** (this fork is arm64-only)
+- [Claude Code](https://claude.com/claude-code) (CLI or the Desktop app), signed in — the usage
+  section reads the same credentials Claude Code uses
 - Node.js
 
 ## How it works
 
 The app is stateless. Claude Code fires hooks as it works; the app polls those updates and aggregates them across every live session into a single icon, a permission dot if one needs you, animating if any session is working, resting when all are idle. It launches itself when Claude Code opens and quits when nothing's running, so there's nothing to manage.
 
-The installer merges its hooks into `~/.claude/settings.json` (backing it up first), and the app's only network call is a once-a-day GitHub release check ([details](PRIVACY.md)).
+The installer merges its hooks into `~/.claude/settings.json` (backing it up first). Its network calls are a once-a-day GitHub release check and, for the usage section, a read of Anthropic's usage endpoint on launch and on menu open ([details](PRIVACY.md)).
 
 ## Troubleshooting
 
@@ -85,16 +106,15 @@ Then drag the app to the Trash.
 
 ## Acknowledgements
 
-I built this for myself, then open-sourced it because other people might find it handy too, and I'm genuinely thrilled that so many of you do. An extra thank-you to everyone who went the extra mile and contributed code, fixes, and ideas.
+Claude Status Bar was built and open-sourced by **[Mick Cesanek](https://github.com/m1ckc3s)** — the app, its design, and everything it does apart from the usage section are their work, and this fork exists only because the original is good enough to want one more thing from. Thanks also to everyone who contributed code, fixes, and ideas upstream.
 
-**[See the contributors →](ACKNOWLEDGEMENTS.md)**
+**[See the upstream contributors →](ACKNOWLEDGEMENTS.md)**
 
 ## Trademark / Not Affiliated
 
 This is an unofficial, open-source side project. **It is not affiliated with, endorsed by, or sponsored by Anthropic.** "Claude" and the Claude spark logo are trademarks of Anthropic, used here nominatively. This project is MIT licensed, but that covers the source code only and conveys no rights to Anthropic's trademarks or brand.
 
-If I'm violating or impeding your trademark, Contact me on X ([@mickces](https://x.com/mickces))
-This is a free side project; I'm not monetizing it.
+This is a free side project; it is not monetized. For trademark concerns about **this fork**, open an issue here. For the original app, contact its author on X ([@mickces](https://x.com/mickces)).
 
 ## License
 

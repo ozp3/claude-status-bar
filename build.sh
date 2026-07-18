@@ -9,15 +9,15 @@ BIN="$APP/Contents/MacOS/ClaudeStatusBar"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 
-echo "Compiling universal binary (arm64 + x86_64)…"
-# Universal binary so it runs natively on both Apple Silicon and Intel (each Mac uses its own
-# slice, so Rosetta is never involved). swiftc emits one arch per -target, so this is two
-# compiles joined by lipo. Keep the deployment target pinned, else swiftc stamps the binary
-# with the build machine's OS and it refuses to launch on older systems despite LSMinimumSystemVersion.
-swiftc -O -target arm64-apple-macos12.0  Sources/*.swift -o "$BIN.arm64"  -framework Cocoa
-swiftc -O -target x86_64-apple-macos12.0 Sources/*.swift -o "$BIN.x86_64" -framework Cocoa
-lipo -create "$BIN.arm64" "$BIN.x86_64" -output "$BIN"
-rm -f "$BIN.arm64" "$BIN.x86_64"
+echo "Compiling arm64 binary…"
+# arm64 only. Upstream ships universal (arm64 + x86_64), but the x86_64 slice needs Swift
+# compatibility libs that the standalone Command Line Tools don't carry — linking it fails with
+# "libswiftCompatibility56.a: fat file missing arch 'x86_64'" unless full Xcode is installed.
+# This fork targets Apple Silicon; to restore universal, install Xcode and put back the second
+# swiftc invocation plus the lipo join.
+# Keep the deployment target pinned, else swiftc stamps the binary with the build machine's OS
+# and it refuses to launch on older systems despite LSMinimumSystemVersion.
+swiftc -O -target arm64-apple-macos12.0 Sources/*.swift -o "$BIN" -framework Cocoa
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -28,8 +28,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>Claude Status Bar</string>
   <key>CFBundleIdentifier</key><string>com.local.claudestatusbar</string>
   <key>CFBundleExecutable</key><string>ClaudeStatusBar</string>
-  <key>CFBundleVersion</key><string>0.3.4</string>
-  <key>CFBundleShortVersionString</key><string>0.3.4</string>
+  <key>CFBundleVersion</key><string>0.4.0</string>
+  <key>CFBundleShortVersionString</key><string>0.4.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>LSUIElement</key><true/>
@@ -44,21 +44,32 @@ cp hooks/update.js hooks/lifecycle.js hooks/install.js hooks/uninstall.js "$APP/
 cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 # --- Signing / notarization ---
-# For a clean (no Gatekeeper warning) release you need, set up once on this Mac:
-#   1. A "Developer ID Application" certificate in your keychain (Xcode > Settings > Accounts).
-#   2. A notarytool credential profile:
+# Empty TEAM_ID = no Developer ID cert, so builds are ad-hoc signed. They run fine locally, but a
+# DOWNLOADED copy is quarantined by Gatekeeper and needs one right-click > Open to launch.
+#
+# To ship a cleanly-opening DMG instead, set this up once on this Mac:
+#   1. Join the Apple Developer Program and install a "Developer ID Application" certificate
+#      in your keychain (Xcode > Settings > Accounts).
+#   2. Create a notarytool credential profile:
 #        xcrun notarytool store-credentials "claude-statusbar" \
-#          --apple-id you@example.com --team-id W9JZ4932LA --password <app-specific-password>
-# Then `./build.sh --dmg` auto-signs + notarizes. Without a cert it falls back to an
-# ad-hoc dev build (runnable locally; users would need right-click > Open once).
-TEAM_ID="W9JZ4932LA"
+#          --apple-id you@example.com --team-id <your-team-id> --password <app-specific-password>
+#   3. Set TEAM_ID below (or pass it in the environment).
+# Then `./build.sh --dmg` auto-signs + notarizes. No code changes needed.
+TEAM_ID="${TEAM_ID:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-claude-statusbar}"
 
 # `|| true` so a missing Developer ID cert (grep matches nothing → nonzero, which `set -eo pipefail`
 # would otherwise treat as a fatal error) falls through to the ad-hoc dev build below instead of
 # aborting the whole script.
-SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
-  | grep "Developer ID Application" | grep "$TEAM_ID" | head -1 | sed -E 's/.*"(.*)"/\1/')" || true
+# The team filter is applied only when TEAM_ID is set: `grep ""` matches every line, so filtering
+# on an empty value would silently accept a cert from any team.
+if [[ -n "$TEAM_ID" ]]; then
+  SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
+    | grep "Developer ID Application" | grep "$TEAM_ID" | head -1 | sed -E 's/.*"(.*)"/\1/')" || true
+else
+  SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
+    | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)"/\1/')" || true
+fi
 
 # Strip extended attributes (Finder info, quarantine, etc.) that bundled resources can
 # carry — codesign rejects them ("resource fork, Finder information, ... not allowed").
@@ -68,7 +79,8 @@ if [[ -n "$SIGN_ID" ]]; then
   echo "Signing with Developer ID: $SIGN_ID"
   codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP"
 else
-  echo "No Developer ID cert for team $TEAM_ID found — ad-hoc signing (local dev build)."
+  echo "No Developer ID cert${TEAM_ID:+ for team $TEAM_ID} found — ad-hoc signing."
+  echo "  (A downloaded build will need one right-click > Open to get past Gatekeeper.)"
   codesign --force --sign - "$APP" >/dev/null 2>&1 || true
 fi
 echo "Built $APP"

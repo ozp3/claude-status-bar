@@ -298,6 +298,8 @@ final class StatusController: NSObject, NSMenuDelegate {
     var prevState: [String: String] = [:]  // id -> previous raw state per session
     var menuIsOpen = false                  // refresh the dropdown's per-session timers only while open
     var sessionMenuItems: [(item: NSMenuItem, id: String)] = []
+    let usage = UsageMonitor()
+    var usageRowViews: [UsageRowView] = []   // kept so a fetch landing mid-open can redraw in place
     var activeBase = ""        // label without the elapsed clock
     var startedAt: Double = 0  // unix seconds the current turn began (0 = no clock)
     var activeColor: NSColor? = nil
@@ -310,6 +312,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     enum AnimStyle: String { case web, code, crab }
     var animStyle: AnimStyle = .web
     var showTimer = false
+    var showUsage = true
     var iconSystem = false // false = brand Orange; true = adaptive black/white (template image)
     var useThinkingWords = true     // rotate a playful verb ("Manifesting…") in place of "Thinking…"
     var sessionWord: [String: String] = [:] // id -> current thinking word; re-picked on each entry into "thinking"
@@ -371,6 +374,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         super.init()
         let d = UserDefaults.standard
         if d.object(forKey: "showTimer") != nil { showTimer = d.bool(forKey: "showTimer") }
+        if d.object(forKey: "showUsage") != nil { showUsage = d.bool(forKey: "showUsage") }
         if d.object(forKey: "iconSystem") != nil { iconSystem = d.bool(forKey: "iconSystem") }
         if d.object(forKey: "thinkingWords") != nil { useThinkingWords = d.bool(forKey: "thinkingWords") }
         if let s = d.string(forKey: "animStyle"), let st = AnimStyle(rawValue: s) { animStyle = st }
@@ -384,6 +388,32 @@ final class StatusController: NSObject, NSMenuDelegate {
         tick()
         ensureHooksInstalled()
         checkForUpdate()
+        setUpUsage()
+    }
+
+    // Usage is fetched when the dropdown opens, not on a background poll — the numbers are only
+    // ever read while the menu is up, so polling in the background just burns requests on data
+    // nobody sees. The endpoint answers in ~300ms (measured; server time dominates, so a pooled
+    // connection is no faster than a cold one), which lands well inside a menu's open time.
+    //
+    // The one exception is this launch fetch. NSMenu can't add rows mid-tracking, so an open that
+    // starts with an empty cache is stuck showing "Loading…" until it's reopened — the fetch lands
+    // but has nowhere to go. Priming at launch means the first open already has rows to restyle
+    // in place.
+    func setUpUsage() {
+        usage.onUpdate = { [weak self] in
+            guard let self = self, self.menuIsOpen else { return }
+            self.refreshOpenUsageRows()
+        }
+        guard showUsage else { return }
+        usage.refresh()
+    }
+
+    // Mirrors refreshOpenMenuRows: the row SET can't change while the menu tracks, so a fetch
+    // landing mid-open only restyles the existing rows (and is skipped if the count moved).
+    func refreshOpenUsageRows() {
+        guard usageRowViews.count == usage.limits.count else { return }
+        for (view, limit) in zip(usageRowViews, usage.limits) { view.configure(limit) }
     }
 
     // Re-runs on first install AND on every version change, so upgrades pick up hook
@@ -445,8 +475,10 @@ final class StatusController: NSObject, NSMenuDelegate {
     // MARK: update check
 
     var currentVersion: String { (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0" }
-    let releaseAPIURL = "https://api.github.com/repos/m1ckc3s/claude-status-bar/releases/latest"
-    let releasePageURL = "https://github.com/m1ckc3s/claude-status-bar/releases/latest"
+    // This fork's own releases, NOT upstream's. Pointing at m1ckc3s here would offer upstream's
+    // DMG as an "update" — which has no usage section, so taking it would silently downgrade.
+    let releaseAPIURL = "https://api.github.com/repos/ozp3/claude-status-bar/releases/latest"
+    let releasePageURL = "https://github.com/ozp3/claude-status-bar/releases/latest"
 
     // Once/day: cache GitHub's latest release tag in UserDefaults. Nothing sent to us.
     func checkForUpdate() {
@@ -491,6 +523,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     func menuDidClose(_ menu: NSMenu) {
         menuIsOpen = false
         sessionMenuItems.removeAll()
+        usageRowViews.removeAll()
     }
 
     // The session SET only changes on reopen (NSMenu can't add/remove rows reliably mid-track).
@@ -515,6 +548,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
 
         sessionMenuItems.removeAll()
+        usageRowViews.removeAll()
         let now = Date().timeIntervalSince1970
         // Gate ONLY the desktop app: opening/clicking a conversation there seeds an idle session without
         // real activity (the click-through clutter), so a desktop session stays out of the dropdown until
@@ -561,7 +595,40 @@ final class StatusController: NSObject, NSMenuDelegate {
             menu.addItem(.separator())
         }
 
+        if showUsage {
+            let width = CGFloat(uiConfig()["boxWidth"] ?? 300)
+            menu.addItem(header("Usage"))
+            // Fires on every open past the cooldown; the rows below are built from the cache and
+            // restyled in place when this lands. The cooldown only exists to collapse rapid
+            // reopens (menu fumbling, a click-through) into one request.
+            usage.refreshIfStale(maxAge: 10)
+            if usage.hasData {
+                for limit in usage.limits {
+                    let view = UsageRowView(width: width)
+                    view.configure(limit)
+                    let it = NSMenuItem()
+                    it.view = view
+                    menu.addItem(it)
+                    usageRowViews.append(view)
+                }
+                // A stale-data note only when a refresh is actually failing — the rows above are
+                // the last good numbers, and silently showing them as current would be a lie.
+                if let err = usage.lastError { menu.addItem(usageNoteRow(err, width: width)) }
+            } else {
+                menu.addItem(usageNoteRow(usage.lastError ?? "Loading…", width: width))
+            }
+            menu.addItem(.separator())
+        }
+
         menu.addItem(header("Options"))
+        menu.addItem(toggleRow(title: "Show usage", isOn: showUsage) { [weak self] on in
+            guard let self = self else { return }
+            self.showUsage = on
+            UserDefaults.standard.set(on, forKey: "showUsage")
+            // Toggling on mid-session has the same empty-cache problem as launch, so prime it here
+            // too — the section fills on the next open rather than sitting at "Loading…".
+            if on, !self.usage.hasData { self.usage.refresh() }
+        })
         menu.addItem(toggleRow(title: "Show timer", isOn: showTimer) { [weak self] on in
             self?.showTimer = on
             UserDefaults.standard.set(on, forKey: "showTimer")

@@ -3,6 +3,30 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-07-18
+
+First release of this fork. Versions from 0.3.4 down are upstream's.
+
+### Added
+- **Usage section in the dropdown.** Shows the Claude plan's rate-limit utilization: the 5-hour
+  session window, the weekly cap, and any model-scoped weekly caps, each as a labelled bar with a
+  percentage and a relative reset time. Amber past 75%, red past 90%, or whenever the API flags the
+  limit itself. Read from Anthropic's `/api/oauth/usage`, the endpoint the Claude UI uses.
+- **"Show usage" toggle** in Options. Off means no usage requests are made at all.
+
+### Notes
+- Usage is fetched on launch and on menu open (max once per 10s), never on a background timer:
+  the numbers are only read while the menu is up. A 429 is honoured for its full `Retry-After`.
+- The OAuth token is re-read per request from `CLAUDE_CODE_OAUTH_TOKEN`, `~/.claude/.credentials.json`,
+  or the Keychain, since Claude Code rotates it. It is never cached to disk or logged.
+- The in-app update check now points at this fork's releases, not upstream's — otherwise it would
+  offer upstream's DMG, which has no usage section, as an "update".
+
+### Changed from upstream
+- **Apple Silicon only.** The x86_64 slice needs Swift compatibility libs the standalone Command
+  Line Tools don't ship; `build.sh` builds arm64 only.
+- **Not notarized.** Builds are ad-hoc signed, so a downloaded copy needs one right-click > Open.
+
 ## [0.3.4] - 2026-07-09
 
 ### Added
