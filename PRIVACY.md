@@ -10,7 +10,7 @@ It makes two kinds of network call, both to third parties, never to the develope
 
 - It sends your Claude Code OAuth token to Anthropic so they can identify your account. Nothing else is sent: no prompts, no files, no project paths, no conversation content.
 - The token is read at request time from `CLAUDE_CODE_OAUTH_TOKEN`, `~/.claude/.credentials.json`, or your Keychain — the same credentials Claude Code itself uses. It is never copied elsewhere, cached to disk, or logged.
-- Requests fire when the app launches and when you open the dropdown (at most one per 10 seconds), not on a background timer. Turning off **Show usage** in the menu stops them entirely.
+- Requests fire when the app launches and when you open the dropdown (at most one per 30 seconds), not on a background timer. Turning off **Show usage** in the menu stops them entirely.
 - Anthropic sees these requests, as they do every Claude Code request. The developer never does.
 
 ---

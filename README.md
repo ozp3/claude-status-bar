@@ -32,6 +32,7 @@ Fetched from Anthropic's `/api/oauth/usage` — the same endpoint the Claude UI 
 
 Everything is controlled from the menu:
 
+- **Always show** *(this fork, on by default)*: keep the icon in the menu bar permanently and start it at login, so usage is always a glance away. Turn it off to restore upstream's behavior (launches with Claude Code, quits when nothing's running).
 - **Show usage:** toggle the usage section (off = no usage requests at all).
 - **Show timer:** toggle the elapsed `1m 1s` clock.
 - **Thinking words:** rotate a playful verb (`Manifesting…`, `Percolating…`) in place of `Thinking…`, like Claude Code (on by default).
@@ -89,7 +90,7 @@ Download the latest DMG and drag it into Applications (choose **Replace**). That
 
 ## How it works
 
-The app is stateless. Claude Code fires hooks as it works; the app polls those updates and aggregates them across every live session into a single icon, a permission dot if one needs you, animating if any session is working, resting when all are idle. It launches itself when Claude Code opens and quits when nothing's running, so there's nothing to manage.
+The app is stateless. Claude Code fires hooks as it works; the app polls those updates and aggregates them across every live session into a single icon, a permission dot if one needs you, animating if any session is working, resting when all are idle. By default it stays in the menu bar permanently (see **Always show**); toggled off, it launches itself when Claude Code opens and quits when nothing's running.
 
 The installer merges its hooks into `~/.claude/settings.json` (backing it up first). Its network calls are a once-a-day GitHub release check and, for the usage section, a read of Anthropic's usage endpoint on launch and on menu open ([details](PRIVACY.md)).
 

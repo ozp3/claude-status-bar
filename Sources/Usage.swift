@@ -42,15 +42,30 @@ final class UsageMonitor {
     private(set) var lastError: String?
     private(set) var lastFetch: Double = 0
     private var inFlight = false
-    // The endpoint is rate limited and answers 429 with a Retry-After (observed: 161s). Since we
-    // fetch on menu open, a user who keeps reopening during the penalty would fire a request every
-    // time and never let it lapse, so hold requests until the server's own deadline passes.
+    // The endpoint is rate limited and answers 429 with a Retry-After. The penalty ESCALATES:
+    // observed 161s on a first offense, 1671s after requests kept arriving during the window. So
+    // honouring the deadline isn't just politeness — retrying into the penalty makes it longer.
+    // Hold every request until the server's own deadline passes.
     private var retryAfter: Double = 0
+
+    // Seconds left on the 429 hold, or nil when not held. The UI renders the countdown from this
+    // at menu-open time rather than from a stored message, so the number is live, and its
+    // disappearance (rather than a stale error string) is what ends the note.
+    var retryRemaining: Int? {
+        let r = Int((retryAfter - Date().timeIntervalSince1970).rounded())
+        return r > 0 ? r : nil
+    }
 
     // Called on the main thread whenever a fetch lands, so an open menu can redraw in place.
     var onUpdate: (() -> Void)?
 
-    private let endpoint = "https://api.anthropic.com/api/oauth/usage"
+    private let endpoint: String
+
+    // The override exists for tests (point it at a local mock and exercise the 429 path without
+    // touching — and escalating — the real endpoint's rate limit).
+    init(endpoint: String = "https://api.anthropic.com/api/oauth/usage") {
+        self.endpoint = endpoint
+    }
 
     var hasData: Bool { !limits.isEmpty }
 
@@ -92,8 +107,9 @@ final class UsageMonitor {
             } else if code == 429 {
                 // Fall back to a minute if the header is missing/unparseable, so a 429 without
                 // Retry-After still backs off instead of retrying on the very next open.
+                // No failure string: the hold note is rendered live from retryRemaining, so it
+                // counts down and vanishes on its own instead of lingering frozen.
                 holdFor = Double(http?.value(forHTTPHeaderField: "Retry-After") ?? "") ?? 60
-                failure = "Rate limited — retrying in \(Int(holdFor.rounded()))s"
             } else if code == 401 || code == 403 {
                 // Expired/rotated token — the next poll re-reads the file, which Claude Code
                 // will have refreshed by then, so this is transient rather than fatal.
@@ -111,6 +127,8 @@ final class UsageMonitor {
                 if let parsed = parsed {
                     self.limits = parsed
                     self.lastError = nil
+                } else if holdFor > 0 {
+                    self.lastError = nil   // 429: retryRemaining carries the note instead
                 } else {
                     self.lastError = failure ?? "Usage unavailable"
                     // Keep the last good numbers on screen rather than blanking the section;

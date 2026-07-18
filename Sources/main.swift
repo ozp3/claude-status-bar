@@ -1,4 +1,5 @@
 import Cocoa
+import ServiceManagement
 
 // Custom-drawn toggle. NSSwitch can't show its accent inside a menu (the menu's vibrant, non-key
 // window draws the implicit accent gray), so we render the track + knob as layers and fill the
@@ -313,6 +314,10 @@ final class StatusController: NSObject, NSMenuDelegate {
     var animStyle: AnimStyle = .web
     var showTimer = false
     var showUsage = true
+    // Upstream launches on SessionStart and self-quits when nothing is running. This fork keeps the
+    // icon up permanently by default: with the usage section it still says something useful when no
+    // session is alive, and an icon that vanishes is a worse place to check your remaining quota.
+    var alwaysShow = true
     var iconSystem = false // false = brand Orange; true = adaptive black/white (template image)
     var useThinkingWords = true     // rotate a playful verb ("Manifesting…") in place of "Thinking…"
     var sessionWord: [String: String] = [:] // id -> current thinking word; re-picked on each entry into "thinking"
@@ -375,6 +380,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         let d = UserDefaults.standard
         if d.object(forKey: "showTimer") != nil { showTimer = d.bool(forKey: "showTimer") }
         if d.object(forKey: "showUsage") != nil { showUsage = d.bool(forKey: "showUsage") }
+        if d.object(forKey: "alwaysShow") != nil { alwaysShow = d.bool(forKey: "alwaysShow") }
         if d.object(forKey: "iconSystem") != nil { iconSystem = d.bool(forKey: "iconSystem") }
         if d.object(forKey: "thinkingWords") != nil { useThinkingWords = d.bool(forKey: "thinkingWords") }
         if let s = d.string(forKey: "animStyle"), let st = AnimStyle(rawValue: s) { animStyle = st }
@@ -389,6 +395,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         ensureHooksInstalled()
         checkForUpdate()
         setUpUsage()
+        syncLoginItem()   // re-assert on every launch; the user may have removed it in System Settings
     }
 
     // Usage is fetched when the dropdown opens, not on a background poll — the numbers are only
@@ -599,9 +606,14 @@ final class StatusController: NSObject, NSMenuDelegate {
             let width = CGFloat(uiConfig()["boxWidth"] ?? 300)
             menu.addItem(header("Usage"))
             // Fires on every open past the cooldown; the rows below are built from the cache and
-            // restyled in place when this lands. The cooldown only exists to collapse rapid
-            // reopens (menu fumbling, a click-through) into one request.
-            usage.refreshIfStale(maxAge: 10)
+            // restyled in place when this lands. The cooldown collapses rapid reopens into one
+            // request — 30s rather than 10s because the endpoint's 429 penalty escalates when
+            // poked (161s observed on first offense, 1671s under continued requests), and a
+            // heavy menu fiddler at 6 req/min gets uncomfortably close to tripping it.
+            usage.refreshIfStale(maxAge: 30)
+            // The 429 note is computed here, at open time, so the countdown is live; when the
+            // deadline passes it simply stops appearing and the refresh above retries.
+            let holdNote = usage.retryRemaining.map { "Rate limited — retrying in \(retryText($0))" }
             if usage.hasData {
                 for limit in usage.limits {
                     let view = UsageRowView(width: width)
@@ -613,14 +625,22 @@ final class StatusController: NSObject, NSMenuDelegate {
                 }
                 // A stale-data note only when a refresh is actually failing — the rows above are
                 // the last good numbers, and silently showing them as current would be a lie.
-                if let err = usage.lastError { menu.addItem(usageNoteRow(err, width: width)) }
+                if let note = holdNote ?? usage.lastError { menu.addItem(usageNoteRow(note, width: width)) }
             } else {
-                menu.addItem(usageNoteRow(usage.lastError ?? "Loading…", width: width))
+                menu.addItem(usageNoteRow(holdNote ?? usage.lastError ?? "Loading…", width: width))
             }
             menu.addItem(.separator())
         }
 
         menu.addItem(header("Options"))
+        menu.addItem(toggleRow(title: "Always show", qualifier: "at login", isOn: alwaysShow) { [weak self] on in
+            guard let self = self else { return }
+            self.alwaysShow = on
+            UserDefaults.standard.set(on, forKey: "alwaysShow")
+            self.syncLoginItem()
+            // Turning it off hands the app back to the normal lifecycle: the next tick starts the
+            // grace period, and it quits if nothing needs it.
+        })
         menu.addItem(toggleRow(title: "Show usage", isOn: showUsage) { [weak self] on in
             guard let self = self else { return }
             self.showUsage = on
@@ -675,6 +695,9 @@ final class StatusController: NSObject, NSMenuDelegate {
         q.target = self
         menu.addItem(q)
     }
+
+    // "12m" / "45s" for the rate-limit countdown — minute precision is plenty for a half-hour hold.
+    func retryText(_ secs: Int) -> String { secs >= 60 ? "\(secs / 60)m" : "\(secs)s" }
 
     func header(_ title: String) -> NSMenuItem {
         if #available(macOS 14.0, *) { return NSMenuItem.sectionHeader(title: title) }
@@ -1116,6 +1139,32 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
 
+    // MARK: login item
+
+    // Half of "always show": not quitting keeps the icon up for this boot, registering as a login
+    // item brings it back after the next one. Without this the icon would still disappear on every
+    // restart until the first Claude Code session launched it.
+    //
+    // SMAppService is macOS 13+. On 12 this is a no-op: the app still refuses to self-quit, it just
+    // won't come back by itself after a reboot (documented in the README).
+    func syncLoginItem() {
+        guard #available(macOS 13.0, *) else { return }
+        let service = SMAppService.mainApp
+        do {
+            // Registering an already-registered service throws, so only act on a real mismatch.
+            if alwaysShow, service.status != .enabled {
+                try service.register()
+            } else if !alwaysShow, service.status == .enabled {
+                try service.unregister()
+            }
+        } catch {
+            // Not fatal: the user may have denied it in System Settings, and everything else about
+            // "always show" still works. Logged rather than surfaced — there's no good menu bar UI
+            // for it, and macOS already shows its own notification when a login item is added.
+            NSLog("ClaudeStatusBar: login item \(alwaysShow ? "register" : "unregister") failed: \(error)")
+        }
+    }
+
     // MARK: self-quit lifecycle
 
     func claudeDesktopRunning() -> Bool {
@@ -1134,6 +1183,9 @@ final class StatusController: NSObject, NSMenuDelegate {
     // Stay while Claude desktop is open OR a session is active; otherwise quit after a
     // short debounced grace (warmup-session churn must not kill us).
     func checkLifecycle() {
+        // "Always show" opts out of self-quitting entirely. Clear the countdown too, so turning the
+        // setting off later starts a fresh grace period instead of quitting on the next tick.
+        if alwaysShow { notNeededSince = nil; return }
         let now = Date()
         if now.timeIntervalSince(launchedAt) < launchGrace { return }
         if claudeDesktopRunning() || sessionCount() > 0 {
@@ -1175,8 +1227,22 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     // MARK: render
 
+    // Redraw guard. evaluate() runs every 0.4s tick and, when nothing is happening, calls
+    // renderResting() each time — which used to repaint the icon from scratch on every tick. Cheap
+    // once, but the app now stays resident 24/7 ("always show"), so a resting icon was burning ~5%
+    // CPU forever redrawing an identical image. Skip a NON-animated redraw whose inputs match the
+    // last one. Animated states are never skipped: animStep drives their frames and clock.
+    var lastRenderKey: String?
+
     func render(label: String, color: NSColor?, animate: Bool, startedAt: Double, dot: Bool = false) {
         guard let button = statusItem.button else { return }
+        if !animate {
+            let key = "\(label)|\(dot)|\(Self.colorKey(color))"
+            if key == lastRenderKey, button.image != nil { return }
+            lastRenderKey = key
+        } else {
+            lastRenderKey = nil   // force a fresh resting redraw when animation next stops
+        }
         button.contentTintColor = nil // we paint the icon color ourselves; template-tint is unreliable
         activeBase = label
         activeColor = color
@@ -1195,6 +1261,13 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
         applyTitle()
         if button.image == nil { button.image = dot ? dotIcon(color: color) : restingIcon(color: color) }
+    }
+
+    // Stable string for an optional NSColor, so the redraw guard can compare colors across ticks
+    // (covers the user switching Orange/System, which must force a repaint).
+    static func colorKey(_ c: NSColor?) -> String {
+        guard let c = c?.usingColorSpace(.sRGB) else { return "nil" }
+        return String(format: "%.3f,%.3f,%.3f", c.redComponent, c.greenComponent, c.blueComponent)
     }
 
     func animStep() {

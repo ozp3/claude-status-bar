@@ -3,6 +3,20 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **"Always show" toggle** (on by default): the icon stays in the menu bar permanently and the app
+  registers as a login item, instead of launching with Claude Code and self-quitting when idle.
+  With the usage section the icon is useful even with no session running. Toggling it off restores
+  upstream's launch/quit lifecycle and removes the login item.
+
+### Fixed
+- The rate-limit note now counts down live and clears itself; previously it showed the number of
+  seconds frozen at the moment of the 429.
+- Menu-open fetch cooldown raised 10s → 30s. The endpoint's 429 penalty escalates when requests
+  keep arriving (observed 161s → 1671s), so the client now stays well clear of it.
+
 ## [0.4.0] - 2026-07-18
 
 First release of this fork. Versions from 0.3.4 down are upstream's.
