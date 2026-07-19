@@ -13,6 +13,7 @@ It makes two kinds of network call, both to third parties, never to the develope
 - Requests fire when the app launches and when you open the dropdown (at most one per 30 seconds), not on a background timer. Turning off **Show usage** in the menu stops them entirely.
 - Anthropic sees these requests, as they do every Claude Code request. The developer never does.
 - The most recent utilization numbers (percentages and reset times, nothing else) are stored locally in the app's preferences so they can still be shown when a fetch fails. Signing out of Claude Code clears them.
+- A small local log of usage-fetch attempts (timestamps, trigger, HTTP outcome, durations — no account data) is kept at `~/.claude/statusbar/usage.log` (capped at 128KB) to diagnose rate-limit behavior. It never leaves your machine.
 
 ---
 Back to the [README](README.md).

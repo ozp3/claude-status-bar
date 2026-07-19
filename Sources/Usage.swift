@@ -37,6 +37,37 @@ struct UsageLimit: Codable {
     }
 }
 
+// Append-only forensics log for the rate limiter: every fetch attempt with its trigger
+// (launch/menu/toggle), outcome (200/429/error), and every suppression with its reason
+// (cooldown/hold). All triggers are human-scale (no timer calls refresh), so volume stays tiny.
+// Local only, no account data beyond limit counts — see PRIVACY.md.
+enum UsageLog {
+    // Tests point this at a scratch file so runs don't pollute the real log.
+    static var path = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/usage.log")
+    private static let stamp: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm:ss"; f.locale = Locale(identifier: "en_US_POSIX"); return f
+    }()
+
+    static func log(_ line: String) {
+        let entry = "\(stamp.string(from: Date())) \(line)\n"
+        let fm = FileManager.default
+        // Rotate at 128KB: one .old generation, newest always in usage.log.
+        if let size = (try? fm.attributesOfItem(atPath: path))?[.size] as? Int, size > 131072 {
+            try? fm.removeItem(atPath: path + ".old")
+            try? fm.moveItem(atPath: path, toPath: path + ".old")
+        }
+        if !fm.fileExists(atPath: path) {
+            try? fm.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+            fm.createFile(atPath: path, contents: nil)
+        }
+        if let fh = FileHandle(forWritingAtPath: path) {
+            defer { try? fh.close() }
+            _ = try? fh.seekToEnd()
+            try? fh.write(contentsOf: entry.data(using: .utf8)!)
+        }
+    }
+}
+
 final class UsageMonitor {
     private(set) var limits: [UsageLimit] = []
     private(set) var lastError: String?
@@ -76,6 +107,9 @@ final class UsageMonitor {
             limits = cached
             dataAt = UserDefaults.standard.double(forKey: "usageCacheAt")
         }
+        if let rem = retryRemaining {
+            UsageLog.log("init: restored 429 hold (\(rem)s left), cache: \(limits.isEmpty ? "none" : "\(limits.count) limits, \(dataAgeText ?? "fresh")")")
+        }
     }
 
     // When the shown numbers were actually fetched (now for live data, the stored stamp for a
@@ -104,17 +138,25 @@ final class UsageMonitor {
 
     // Poll cadence is generous: utilization moves in percent points over minutes, and the
     // dropdown refreshes on open anyway, so anything tighter is wasted requests.
-    func refreshIfStale(maxAge: Double = 120) {
-        if Date().timeIntervalSince1970 - lastFetch < maxAge { return }
-        refresh()
+    func refreshIfStale(maxAge: Double = 120, trigger: String = "?") {
+        let age = Date().timeIntervalSince1970 - lastFetch
+        if age < maxAge {
+            UsageLog.log("\(trigger): skip (cooldown, \(Int(maxAge - age))s left)")
+            return
+        }
+        refresh(trigger: trigger)
     }
 
-    func refresh() {
+    func refresh(trigger: String = "?") {
         if inFlight { return }
-        if Date().timeIntervalSince1970 < retryAfter { return }
+        if let rem = retryRemaining {
+            UsageLog.log("\(trigger): skip (429 hold, \(rem)s left)")
+            return
+        }
         // Re-read the token on every fetch instead of caching it: Claude Code rotates the OAuth
         // token roughly hourly and rewrites the credentials file, so a cached copy goes 401 stale.
         guard let token = Self.loadToken() else {
+            UsageLog.log("\(trigger): no token (not signed in)")
             limits = []
             dataAt = 0
             lastError = "Not signed in to Claude Code"
@@ -128,6 +170,7 @@ final class UsageMonitor {
         }
         guard let url = URL(string: endpoint) else { return }
         inFlight = true
+        let started = Date()
         var req = URLRequest(url: url)
         req.timeoutInterval = 10
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -157,6 +200,16 @@ final class UsageMonitor {
             } else if let data = data {
                 parsed = Self.parse(data)
                 if parsed == nil { failure = "Unexpected usage response" }
+            }
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            if let err = err {
+                UsageLog.log("\(trigger): request FAILED in \(ms)ms — \(err.localizedDescription)")
+            } else if code == 429 {
+                UsageLog.log("\(trigger): 429 in \(ms)ms, retry-after=\(Int(holdFor))s")
+            } else if code == 200 {
+                UsageLog.log("\(trigger): 200 in \(ms)ms (\(parsed?.count ?? 0) limits\(parsed == nil ? ", PARSE FAILED" : ""))")
+            } else {
+                UsageLog.log("\(trigger): HTTP \(code) in \(ms)ms")
             }
             DispatchQueue.main.async {
                 self.inFlight = false

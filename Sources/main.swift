@@ -414,7 +414,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             self.refreshOpenUsageRows()
         }
         guard showUsage else { return }
-        usage.refresh()
+        usage.refresh(trigger: "launch")
     }
 
     // Mirrors refreshOpenMenuRows: the row SET can't change while the menu tracks, so a fetch
@@ -611,7 +611,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             // request — 30s rather than 10s because the endpoint's 429 penalty escalates when
             // poked (161s observed on first offense, 1671s under continued requests), and a
             // heavy menu fiddler at 6 req/min gets uncomfortably close to tripping it.
-            usage.refreshIfStale(maxAge: 30)
+            usage.refreshIfStale(maxAge: 30, trigger: "menu")
             // The 429 note is computed here, at open time, so the countdown is live; when the
             // deadline passes it simply stops appearing and the refresh above retries.
             let holdNote = usage.retryRemaining.map { "Rate limited — retrying in \(retryText($0))" }
@@ -652,7 +652,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             UserDefaults.standard.set(on, forKey: "showUsage")
             // Toggling on mid-session has the same empty-cache problem as launch, so prime it here
             // too — the section fills on the next open rather than sitting at "Loading…".
-            if on, !self.usage.hasData { self.usage.refresh() }
+            if on, !self.usage.hasData { self.usage.refresh(trigger: "toggle") }
         })
         menu.addItem(toggleRow(title: "Show timer", isOn: showTimer) { [weak self] on in
             self?.showTimer = on

@@ -3,6 +3,15 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.3] - 2026-07-19
+
+### Added
+- **Usage fetch log** at `~/.claude/statusbar/usage.log` (local only, 128KB cap, one `.old`
+  generation): every fetch attempt with its trigger (launch/menu/toggle), outcome (HTTP status,
+  duration, limit count, Retry-After on a 429), every suppression with its reason (cooldown /
+  429 hold), and the hold/cache state restored at process start. Answers "when and under what
+  circumstances did we get rate limited" without guesswork.
+
 ## [0.4.2] - 2026-07-19
 
 ### Added
