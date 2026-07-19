@@ -104,7 +104,7 @@ if [[ "${1:-}" == "--dmg" ]]; then
   # Notarize + staple the APP first, so a copied-out .app is independently notarized.
   # The DMG itself is notarized + stapled later (below) — that's the check a downloader
   # actually hits, so the image must carry its own ticket to open without a warning.
-  if [[ "${SKIP_NOTARIZE:-}" != "1" && -n "$SIGN_ID" ]]; then
+  if [[ "${SKIP_NOTARIZE:-}" != "1" && -n "$SIGN_ID" && "$SIGN_ID" != *"ClaudeStatusBar Signing"* ]]; then
     echo "Notarizing the app via profile '$NOTARY_PROFILE' (can take a minute)…"
     rm -f build/app-notarize.zip
     ditto -c -k --keepParent "$APP" build/app-notarize.zip
@@ -180,7 +180,10 @@ OSA
   # Sign, then notarize + staple the DMG so the downloaded image opens with no Gatekeeper
   # warning. Stapling writes the ticket into the read-only image's metadata; it does not
   # mount-and-write the inner filesystem, so .fseventsd does not come back.
-  if [[ -n "$SIGN_ID" ]]; then
+  if [[ "$SIGN_ID" == *"ClaudeStatusBar Signing"* ]]; then
+    codesign --force --sign "$SIGN_ID" "$DMG"
+    echo "DMG signed with local identity (not notarized — fine for local installs)."
+  elif [[ -n "$SIGN_ID" ]]; then
     codesign --force --timestamp --sign "$SIGN_ID" "$DMG"
     if [[ "${SKIP_NOTARIZE:-}" != "1" ]]; then
       echo "Notarizing the DMG via profile '$NOTARY_PROFILE' (can take a minute)…"
