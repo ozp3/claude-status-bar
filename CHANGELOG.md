@@ -3,6 +3,16 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.8] - 2026-07-19
+
+### Fixed
+- **The Keychain permission dialog can now be typed into.** Credential resolution used to run on
+  the main thread from inside the ⟳ press — mid menu-tracking — so when macOS raised its
+  permission dialog, both the frozen menu and the dialog fought over input and the password field
+  took no keystrokes. Token loading now hops off the main thread first; the dialog activating
+  closes the menu normally and accepts input. The refresh spinner also waits up to 60s so it
+  doesn't give up while you type your password.
+
 ## [0.4.7] - 2026-07-19
 
 ### Changed

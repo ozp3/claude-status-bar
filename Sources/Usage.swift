@@ -159,8 +159,24 @@ final class UsageMonitor {
         }
         // Re-read the token on every fetch instead of caching it: Claude Code rotates the OAuth
         // token and may rewrite its stored credentials at any time.
+        //
+        // Resolution MUST leave the main thread first. The Keychain read can block on the
+        // system permission dialog (SecurityAgent), and the ⟳ press arrives mid menu-tracking:
+        // with the main thread stuck inside SecItemCopyMatching, both the menu and the dialog
+        // freeze and the password field can't take keystrokes (observed). Off the main thread,
+        // the dialog activating dismisses the menu normally and types fine.
+        inFlight = true
+        DispatchQueue.global().async { [weak self] in
+            let state = Self.loadToken()
+            DispatchQueue.main.async { self?.continueRefresh(with: state, trigger: trigger) }
+        }
+    }
+
+    // Main-thread continuation once credentials are resolved. Every path that does NOT start a
+    // network request must clear inFlight — it was set optimistically before the async hop.
+    private func continueRefresh(with tokenState: TokenState, trigger: String) {
         let token: String
-        switch Self.loadToken() {
+        switch tokenState {
         case .valid(let t):
             token = t
         case .expired:
@@ -170,11 +186,13 @@ final class UsageMonitor {
             // lastFetch is left alone so the next menu open re-checks immediately; recovery is
             // automatic the moment Claude Code writes a fresh token.
             UsageLog.log("\(trigger): skip (stored tokens expired; waiting for Claude Code to rotate)")
+            inFlight = false
             lastError = "Token expired — start a Claude Code session to refresh it"
             onUpdate?()
             return
         case .missing:
             UsageLog.log("\(trigger): no token (not signed in)")
+            inFlight = false
             limits = []
             dataAt = 0
             lastError = "Not signed in to Claude Code"
@@ -190,12 +208,12 @@ final class UsageMonitor {
         // after a 401, never retry the exact token that failed — wait for a different one.
         if let bad = badTokenTail, token.hasSuffix(bad) {
             UsageLog.log("\(trigger): skip (token unchanged since last 401)")
+            inFlight = false
             lastError = "Token expired — start a Claude Code session to refresh it"
             onUpdate?()
             return
         }
-        guard let url = URL(string: endpoint) else { return }
-        inFlight = true
+        guard let url = URL(string: endpoint) else { inFlight = false; return }
         let started = Date()
         var req = URLRequest(url: url)
         req.timeoutInterval = 10
@@ -540,13 +558,14 @@ final class UsageHeaderView: NSView {
 
     // Press feedback: the arrow swaps for the native small spinner while the request runs.
     // The safety timeout covers a completion that never fires (it shouldn't, but a stuck
-    // spinner reads as a hang, and the request itself times out at 10s).
+    // spinner reads as a hang). Generous because the fetch may legitimately sit waiting on the
+    // Keychain permission dialog while the user types their password.
     func beginSpin() {
         button.isHidden = true
         spinner.startAnimation(nil)
         statusGeneration += 1
         statusField.stringValue = ""
-        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in self?.endSpin(status: nil) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in self?.endSpin(status: nil) }
     }
 
     func endSpin(status: String?) {
