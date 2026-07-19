@@ -3,6 +3,25 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.12] - 2026-07-20
+
+### Added
+- **One-click token recovery.** When the note says the token is expired, the dropdown grows a
+  "Refresh Claude token…" item that opens Terminal running `claude` — its startup refreshes the
+  stored credentials, and the note heals itself on the next menu open. Implemented as a .command
+  file so no Automation permission is needed.
+
+### Fixed
+- **Retracted the `claude setup-token` advice from 0.4.11**: the usage endpoint answers those
+  tokens with 403 Forbidden (verified) — that token class cannot read usage. The token-file
+  override remains for tokens the endpoint accepts, and a 403 from a file token now says to
+  delete the file instead of pointlessly recreating it.
+
+### Notes
+- Observed: routine silent token rotations UPDATE the Keychain item in place — the "Always Allow"
+  grant survives, no dialog. Only a full re-login recreates the item (dialog returns once), and
+  app updates change the ad-hoc signature (dialog returns once). Far less frequent than feared.
+
 ## [0.4.11] - 2026-07-19
 
 ### Added

@@ -562,6 +562,34 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
     }
 
+    // One-click recovery for an expired token: opens Terminal running `claude`, whose startup
+    // refreshes the stored credentials (observed: silent rotation updates the Keychain item in
+    // place, no permission dialog). A .command file via NSWorkspace needs no Automation consent,
+    // unlike scripting Terminal with AppleScript. Shown only while the note is token-related.
+    func addTokenFixItem(ifNeededTo menu: NSMenu) {
+        guard usage.lastError?.hasPrefix("Token expired") == true || usage.lastError?.hasPrefix("Not signed in") == true else { return }
+        let it = NSMenuItem(title: "Refresh Claude token…", action: #selector(refreshClaudeToken), keyEquivalent: "")
+        it.target = self
+        menu.addItem(it)
+    }
+
+    @objc func refreshClaudeToken() {
+        let dir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar")
+        let path = (dir as NSString).appendingPathComponent("refresh-token.command")
+        let script = """
+        #!/bin/zsh
+        # Opened by Claude Status Bar: starting a claude session refreshes the stored OAuth token.
+        # Once claude is up (or after you complete a login it asks for), you can exit and close this.
+        clear
+        echo "Starting claude to refresh its token — exit it (Ctrl+C or /exit) once it has loaded."
+        exec "$(command -v claude || echo "$HOME/.local/bin/claude")"
+        """
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try? script.write(toFile: path, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+        NSWorkspace.shared.open(URL(fileURLWithPath: path))
+    }
+
     func addUsageNote(_ text: String, width: CGFloat, to menu: NSMenu) {
         let it = usageNoteRow(text, width: width)
         usageNoteField = it.view?.subviews.compactMap { $0 as? NSTextField }.first
@@ -691,11 +719,13 @@ final class StatusController: NSObject, NSMenuDelegate {
                 if let note = holdNote ?? usage.lastError {
                     let suffix = usage.dataAgeText.map { " · data \($0)" } ?? ""
                     addUsageNote(note + suffix, width: width, to: menu)
+                    addTokenFixItem(ifNeededTo: menu)
                 } else if let age = usage.dataAgeText {
                     addUsageNote("Data \(age) — press ⟳", width: width, to: menu)
                 }
             } else {
                 addUsageNote(holdNote ?? usage.lastError ?? "No data yet — press ⟳", width: width, to: menu)
+                addTokenFixItem(ifNeededTo: menu)
             }
             menu.addItem(.separator())
         }

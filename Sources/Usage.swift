@@ -325,8 +325,10 @@ final class UsageMonitor {
                 // The token died before its expiresAt (revoked/rotated server-side). Recover when
                 // a fresh one appears; the badTokenTail gate stops repeats meanwhile. The advice
                 // depends on where the dead token came from.
+                // A 403 on a well-formed setup-token file means that token CLASS can't read this
+                // endpoint (observed) — retrying or recreating it won't help; the file must go.
                 failure = Self.lastTokenSource == "token file"
-                    ? "Token file rejected — re-run claude setup-token"
+                    ? "Token file not accepted here — delete ~/.claude/statusbar/token"
                     : "Token expired — start a Claude Code session to refresh it"
             } else if code != 200 {
                 failure = "Usage unavailable (HTTP \(code))"
