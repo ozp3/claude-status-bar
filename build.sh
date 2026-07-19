@@ -58,24 +58,39 @@ cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 TEAM_ID="${TEAM_ID:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-claude-statusbar}"
 
-# `|| true` so a missing Developer ID cert (grep matches nothing → nonzero, which `set -eo pipefail`
-# would otherwise treat as a fatal error) falls through to the ad-hoc dev build below instead of
-# aborting the whole script.
-# The team filter is applied only when TEAM_ID is set: `grep ""` matches every line, so filtering
-# on an empty value would silently accept a cert from any team.
-if [[ -n "$TEAM_ID" ]]; then
-  SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
-    | grep "Developer ID Application" | grep "$TEAM_ID" | head -1 | sed -E 's/.*"(.*)"/\1/')" || true
-else
-  SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
-    | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)"/\1/')" || true
+# Identity preference order:
+#   1. A local self-signed "ClaudeStatusBar Signing" cert (create once in Keychain Access:
+#      Certificate Assistant > Create a Certificate > Code Signing). Free, and because every
+#      build then shares one identity, the Keychain-access grant for reading Claude Code's
+#      credentials SURVIVES app updates — ad-hoc signing changed identity per build, which reset
+#      the permission dialog on every single install.
+#   2. A Developer ID cert (also enables notarization; see above).
+#   3. Ad-hoc fallback.
+# `|| true` so a missing cert (grep matches nothing → nonzero, which `set -eo pipefail` would
+# otherwise treat as fatal) falls through instead of aborting. The team filter applies only when
+# TEAM_ID is set: `grep ""` matches every line, so filtering on empty would accept any team.
+SIGN_ID="$(security find-identity -p codesigning 2>/dev/null \
+  | grep "ClaudeStatusBar Signing" | head -1 | sed -E 's/.*"(.*)"/\1/')" || true
+if [[ -z "$SIGN_ID" ]]; then
+  if [[ -n "$TEAM_ID" ]]; then
+    SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
+      | grep "Developer ID Application" | grep "$TEAM_ID" | head -1 | sed -E 's/.*"(.*)"/\1/')" || true
+  else
+    SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
+      | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)"/\1/')" || true
+  fi
 fi
 
 # Strip extended attributes (Finder info, quarantine, etc.) that bundled resources can
 # carry — codesign rejects them ("resource fork, Finder information, ... not allowed").
 xattr -cr "$APP"
 
-if [[ -n "$SIGN_ID" ]]; then
+if [[ "$SIGN_ID" == *"ClaudeStatusBar Signing"* ]]; then
+  # Self-signed local identity: skip the Apple timestamp server (it's for real certs) and skip
+  # hardened runtime (pointless without notarization). Stable identity is the whole point.
+  echo "Signing with local identity: $SIGN_ID"
+  codesign --force --sign "$SIGN_ID" "$APP"
+elif [[ -n "$SIGN_ID" ]]; then
   echo "Signing with Developer ID: $SIGN_ID"
   codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP"
 else
