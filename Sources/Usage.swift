@@ -65,6 +65,10 @@ final class UsageMonitor {
     // touching — and escalating — the real endpoint's rate limit).
     init(endpoint: String = "https://api.anthropic.com/api/oauth/usage") {
         self.endpoint = endpoint
+        // The hold MUST survive the process: the penalty escalates server-side, and app relaunches
+        // are exactly when a blind launch fetch would fire into it. Without persistence, every
+        // quit-and-revive cycle extended the penalty (observed climbing 161s → 1671s → 60m).
+        retryAfter = UserDefaults.standard.double(forKey: "usageRetryUntil")
     }
 
     var hasData: Bool { !limits.isEmpty }
@@ -123,10 +127,14 @@ final class UsageMonitor {
             DispatchQueue.main.async {
                 self.inFlight = false
                 self.lastFetch = Date().timeIntervalSince1970
-                if holdFor > 0 { self.retryAfter = self.lastFetch + holdFor }
+                if holdFor > 0 {
+                    self.retryAfter = self.lastFetch + holdFor
+                    UserDefaults.standard.set(self.retryAfter, forKey: "usageRetryUntil")
+                }
                 if let parsed = parsed {
                     self.limits = parsed
                     self.lastError = nil
+                    UserDefaults.standard.removeObject(forKey: "usageRetryUntil")
                 } else if holdFor > 0 {
                     self.lastError = nil   // 429: retryRemaining carries the note instead
                 } else {

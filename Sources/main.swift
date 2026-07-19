@@ -392,6 +392,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         RunLoop.main.add(t, forMode: .common)
         pollTimer = t
         tick()
+        try? FileManager.default.removeItem(atPath: quitMarkerPath)   // launching = wanting the icon back
         ensureHooksInstalled()
         checkForUpdate()
         setUpUsage()
@@ -917,7 +918,17 @@ final class StatusController: NSObject, NSMenuDelegate {
         return m > 0 ? "\(m)m \(s)s" : "\(s)s"
     }
 
-    @objc func quit() { NSApp.terminate(nil) }
+    // Menu Quit must actually stick. The SessionStart hook revives the app on every Claude Code
+    // event, so without a marker a user's quit lasts only until their next prompt — infuriating,
+    // and each revival's launch fetch could prod the usage rate limiter too. The marker suppresses
+    // the hook's relaunch; ANY subsequent launch (login item at boot, Spotlight, Finder) clears it,
+    // because each of those means someone wants the icon back.
+    var quitMarkerPath: String { (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/user-quit") }
+
+    @objc func quit() {
+        FileManager.default.createFile(atPath: quitMarkerPath, contents: nil)
+        NSApp.terminate(nil)
+    }
 
     @objc func openClaude() {
         let ws = NSWorkspace.shared

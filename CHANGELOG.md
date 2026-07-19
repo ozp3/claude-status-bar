@@ -3,7 +3,7 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.4.1] - 2026-07-19
 
 ### Added
 - **"Always show" toggle** (on by default): the icon stays in the menu bar permanently and the app
@@ -12,10 +12,16 @@ All notable changes to Claude Status Bar are documented here. This project follo
   upstream's launch/quit lifecycle and removes the login item.
 
 ### Fixed
-- The rate-limit note now counts down live and clears itself; previously it showed the number of
-  seconds frozen at the moment of the 429.
-- Menu-open fetch cooldown raised 10s → 30s. The endpoint's 429 penalty escalates when requests
-  keep arriving (observed 161s → 1671s), so the client now stays well clear of it.
+- **Quit now sticks.** The SessionStart hook used to revive the app on the next Claude Code event,
+  making the menu-bar Quit effectively impossible. Quit now writes a marker the hook respects;
+  launching the app any other way (login, Spotlight, Finder) clears it.
+- **The 429 hold survives relaunches.** The endpoint's rate-limit penalty escalates when requests
+  keep arriving (observed climbing 161s → 1671s → 60m), and every relaunch used to fire a blind
+  launch fetch into it — so quit-and-reopen cycles kept extending the penalty. The hold deadline is
+  now persisted and honoured from the first moment of a fresh process.
+- The rate-limit note counts down live and clears itself; previously it showed the seconds frozen
+  at the moment of the 429.
+- Menu-open fetch cooldown raised 10s → 30s, for the same escalation reason.
 
 ## [0.4.0] - 2026-07-18
 
