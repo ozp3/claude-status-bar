@@ -558,7 +558,7 @@ final class StatusController: NSObject, NSMenuDelegate {
                 if usage.lastError == nil { usageNoteField?.stringValue = "Signed in — press ⟳" }
             } else {
                 DispatchQueue.global().async { [weak self] in
-                    let state = UsageMonitor.loadToken()
+                    let state = UsageMonitor.loadToken(includeKeychain: false)
                     DispatchQueue.main.async {
                         guard let self = self, case .valid(let tok) = state else { return }
                         self.usage.clearTokenErrorIfFresh(tok)
@@ -573,15 +573,20 @@ final class StatusController: NSObject, NSMenuDelegate {
     // refreshes the stored credentials (observed: silent rotation updates the Keychain item in
     // place, no permission dialog). A .command file via NSWorkspace needs no Automation consent,
     // unlike scripting Terminal with AppleScript. Shown only while the note is token-related.
-    func addTokenFixItem(ifNeededTo menu: NSMenu) {
-        guard usage.lastError?.hasPrefix("Token") == true || usage.lastError?.hasPrefix("Not signed in") == true
-              || usage.lastError?.hasPrefix("Session") == true else { return }
-        // Primary fix: the app's own sign-in — one browser approval, then the app refreshes its
-        // own tokens forever and the Keychain is out of the picture entirely.
+    // Always offered while there's no own session — signing in is the PRIMARY path, not an error
+    // fallback. (It used to appear only on token errors, and the menu-open heal could clear the
+    // error before the user ever saw the item.)
+    func addSignInItem(to menu: NSMenu) {
+        guard ClaudeOAuth.loadSession() == nil else { return }
         let signIn = NSMenuItem(title: signInFlow == nil ? "Sign in with Claude…" : "Waiting for browser sign-in…",
                                 action: signInFlow == nil ? #selector(startSignIn) : nil, keyEquivalent: "")
         signIn.target = self
         menu.addItem(signIn)
+    }
+
+    func addTokenFixItem(ifNeededTo menu: NSMenu) {
+        guard usage.lastError?.hasPrefix("Token") == true || usage.lastError?.hasPrefix("Not signed in") == true
+              || usage.lastError?.hasPrefix("Session") == true else { return }
         // Legacy crutch, only relevant while still borrowing Claude Code's credentials.
         if !ClaudeOAuth.hasUsableSession {
             let it = NSMenuItem(title: "Refresh Claude token…", action: #selector(refreshClaudeToken), keyEquivalent: "")
@@ -774,6 +779,7 @@ final class StatusController: NSObject, NSMenuDelegate {
                 addUsageNote(holdNote ?? usage.lastError ?? "No data yet — press ⟳", width: width, to: menu)
                 addTokenFixItem(ifNeededTo: menu)
             }
+            addSignInItem(to: menu)
             menu.addItem(.separator())
         }
 

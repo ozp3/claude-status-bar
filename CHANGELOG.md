@@ -3,6 +3,18 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-07-20
+
+### Fixed
+- **"Sign in with Claude…" is now always in the dropdown** while no own session exists. It used
+  to appear only during token errors — and the menu-open heal could clear the error (via a
+  Keychain read!) before the user ever saw the item, leaving them stuck in password-prompt land
+  with no visible way to the fix.
+- **Opening the menu can no longer touch the Keychain.** The passive token re-check now skips
+  the Keychain entirely (own session + file sources only); the only code path that may read the
+  Keychain — and thus ever show its password dialog — is a user-triggered ⟳ press while still
+  on borrowed credentials.
+
 ## [0.5.0] - 2026-07-20
 
 ### Added

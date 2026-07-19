@@ -480,7 +480,10 @@ final class UsageMonitor {
     // Same resolution order Claude Code itself uses, cheapest first — but expiry-checked. Firing
     // a request with an expired token is worse than useless: the 401 feeds an auth-failure
     // throttle that answered our very next request with a 60-minute 429 (see usage.log).
-    static func loadToken() -> TokenState {
+    // includeKeychain: false for passive checks (menu-open healing) — a Keychain read can raise
+    // the password dialog, and a dialog triggered by merely OPENING the menu is unacceptable.
+    // Only the user-triggered fetch path may touch the Keychain.
+    static func loadToken(includeKeychain: Bool = true) -> TokenState {
         // The app's OWN sign-in wins over everything borrowed: no Keychain, self-refreshing.
         // usableAccessToken may hit the network (refresh grant) — loadToken is only ever called
         // from the user-triggered fetch path, on a background queue.
@@ -500,7 +503,9 @@ final class UsageMonitor {
             }
         }
         var sawExpired = false
-        for (source, data) in [("credentials file", credentialsFileData()), ("keychain", keychainData())] {
+        var sources: [(String, Data?)] = [("credentials file", credentialsFileData())]
+        if includeKeychain { sources.append(("keychain", keychainData())) }
+        for (source, data) in sources {
             guard let data = data else { continue }
             switch token(fromCredentialsJSON: data) {
             case .valid(let t):
