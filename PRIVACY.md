@@ -10,7 +10,7 @@ It makes two kinds of network call, both to third parties, never to the develope
 
 - It sends your Claude Code OAuth token to Anthropic so they can identify your account. Nothing else is sent: no prompts, no files, no project paths, no conversation content.
 - The token is read at request time from `CLAUDE_CODE_OAUTH_TOKEN`, `~/.claude/.credentials.json`, or your Keychain — the same credentials Claude Code itself uses. It is never copied elsewhere, cached to disk, or logged.
-- Requests fire when the app launches and when you open the dropdown (at most one per 30 seconds), not on a background timer. Turning off **Show usage** in the menu stops them entirely.
+- Requests fire only when the app launches (once, to warm the display) and when you press the refresh button in the dropdown's Usage header (at most one per 30 seconds). Merely opening the dropdown fires nothing, and there is no background timer. Turning off **Show usage** in the menu stops requests entirely.
 - Anthropic sees these requests, as they do every Claude Code request. The developer never does.
 - The most recent utilization numbers (percentages and reset times, nothing else) are stored locally in the app's preferences so they can still be shown when a fetch fails. Signing out of Claude Code clears them.
 - A small local log of usage-fetch attempts (timestamps, trigger, HTTP outcome, durations — no account data) is kept at `~/.claude/statusbar/usage.log` (capped at 128KB) to diagnose rate-limit behavior. It never leaves your machine.

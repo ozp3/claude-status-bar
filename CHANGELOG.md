@@ -3,6 +3,15 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.5] - 2026-07-19
+
+### Changed
+- **Usage refresh is now manual.** Opening the dropdown no longer fires a request — you may be
+  there for a toggle, not the quota. The Usage header gained a ⟳ button, which is the only
+  request path from the menu (same 30s cooldown). The once-per-launch warm fetch stays.
+- Stale cached numbers now carry a plain age note ("Data 3h old — press ⟳") even when nothing
+  is failing, since with manual refresh the bars can legitimately be hours old.
+
 ## [0.4.4] - 2026-07-19
 
 ### Fixed

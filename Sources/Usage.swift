@@ -476,6 +476,38 @@ final class UsageRowView: NSView {
     }
 }
 
+// Section header with a refresh button: "Usage" on the left, ⟳ on the right. The button is the
+// ONLY thing that fires a usage request from the menu — opening the dropdown alone never does,
+// so opening it to flip a setting costs nothing. Same 30s cooldown as before, enforced by the
+// monitor, so mashing the button can't burst.
+final class UsageHeaderView: NSView {
+    var onRefresh: (() -> Void)?
+    private let button = NSButton()
+
+    init(width: CGFloat) {
+        super.init(frame: NSRect(x: 0, y: 0, width: width, height: 22))
+        autoresizingMask = [.width]
+        let label = NSTextField(labelWithString: "Usage")
+        label.font = NSFont.systemFont(ofSize: NSFont.menuFont(ofSize: 0).pointSize - 2, weight: .semibold)
+        label.textColor = .secondaryLabelColor
+        label.sizeToFit()
+        label.setFrameOrigin(NSPoint(x: 14, y: (22 - label.frame.height) / 2))
+        label.autoresizingMask = [.maxXMargin]
+        addSubview(label)
+
+        button.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh usage")
+        button.isBordered = false
+        button.contentTintColor = .secondaryLabelColor
+        button.target = self
+        button.action = #selector(clicked)
+        button.frame = NSRect(x: width - 14 - 20, y: 1, width: 20, height: 20)
+        button.autoresizingMask = [.minXMargin]
+        addSubview(button)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    @objc private func clicked() { onRefresh?() }
+}
+
 // One-line rows for the section's non-bar states (loading / error), styled like a disabled
 // menu item so they read as status rather than as something clickable.
 func usageNoteRow(_ text: String, width: CGFloat) -> NSMenuItem {

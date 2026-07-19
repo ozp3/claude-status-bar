@@ -399,14 +399,14 @@ final class StatusController: NSObject, NSMenuDelegate {
         syncLoginItem()   // re-assert on every launch; the user may have removed it in System Settings
     }
 
-    // Usage is fetched when the dropdown opens, not on a background poll — the numbers are only
-    // ever read while the menu is up, so polling in the background just burns requests on data
-    // nobody sees. The endpoint answers in ~300ms (measured; server time dominates, so a pooled
-    // connection is no faster than a cold one), which lands well inside a menu's open time.
+    // Usage is fetched ONLY when the user asks: the ⟳ button in the dropdown's Usage header
+    // (30s cooldown). Opening the menu fires nothing — it may be a settings visit — and there is
+    // no background poll. The endpoint answers in ~300ms (measured), well inside a menu's
+    // open time, so a ⟳ press restyles the bars in place before the menu closes.
     //
     // The one exception is this launch fetch. NSMenu can't add rows mid-tracking, so an open that
-    // starts with an empty cache is stuck showing "Loading…" until it's reopened — the fetch lands
-    // but has nowhere to go. Priming at launch means the first open already has rows to restyle
+    // starts with an empty cache could only show a note until reopened — the fetch lands but has
+    // nowhere to go. Priming once at launch means the first open already has rows to restyle
     // in place.
     func setUpUsage() {
         usage.onUpdate = { [weak self] in
@@ -605,15 +605,17 @@ final class StatusController: NSObject, NSMenuDelegate {
 
         if showUsage {
             let width = CGFloat(uiConfig()["boxWidth"] ?? 300)
-            menu.addItem(header("Usage"))
-            // Fires on every open past the cooldown; the rows below are built from the cache and
-            // restyled in place when this lands. The cooldown collapses rapid reopens into one
-            // request — 30s rather than 10s because the endpoint's 429 penalty escalates when
-            // poked (161s observed on first offense, 1671s under continued requests), and a
-            // heavy menu fiddler at 6 req/min gets uncomfortably close to tripping it.
-            usage.refreshIfStale(maxAge: 30, trigger: "menu")
+            // Opening the menu fires NOTHING — the user may be here for a toggle, not the quota.
+            // The ⟳ in the header is the only request path from the menu (30s cooldown inside the
+            // monitor). Rows show the cached numbers; a fetch landing mid-open restyles them in
+            // place, and the age note below keeps stale data honest.
+            let headerView = UsageHeaderView(width: width)
+            headerView.onRefresh = { [weak self] in self?.usage.refreshIfStale(maxAge: 30, trigger: "button") }
+            let headerItem = NSMenuItem()
+            headerItem.view = headerView
+            menu.addItem(headerItem)
             // The 429 note is computed here, at open time, so the countdown is live; when the
-            // deadline passes it simply stops appearing and the refresh above retries.
+            // deadline passes it simply stops appearing and the next ⟳ press retries.
             let holdNote = usage.retryRemaining.map { "Rate limited — retrying in \(retryText($0))" }
             if usage.hasData {
                 for limit in usage.limits {
@@ -624,15 +626,17 @@ final class StatusController: NSObject, NSMenuDelegate {
                     menu.addItem(it)
                     usageRowViews.append(view)
                 }
-                // A stale-data note only when a refresh is actually failing — the rows above are
-                // the last good numbers, and silently showing them as current would be a lie.
-                // The age suffix appears once the data is old enough to mislead (>15 min).
+                // Stale or failing data is labelled rather than hidden: an error/hold note when a
+                // refresh is failing, otherwise a plain age note once the snapshot is >15 min old
+                // (with manual-only refresh, quietly presenting old bars as current would lie).
                 if let note = holdNote ?? usage.lastError {
                     let suffix = usage.dataAgeText.map { " · data \($0)" } ?? ""
                     menu.addItem(usageNoteRow(note + suffix, width: width))
+                } else if let age = usage.dataAgeText {
+                    menu.addItem(usageNoteRow("Data \(age) — press ⟳", width: width))
                 }
             } else {
-                menu.addItem(usageNoteRow(holdNote ?? usage.lastError ?? "Loading…", width: width))
+                menu.addItem(usageNoteRow(holdNote ?? usage.lastError ?? "No data yet — press ⟳", width: width))
             }
             menu.addItem(.separator())
         }
