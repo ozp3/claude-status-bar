@@ -9,7 +9,7 @@ It makes two kinds of network call, both to third parties, never to the develope
 **2. Usage** — a request to Anthropic's `/api/oauth/usage` endpoint, the same one the Claude UI uses, to read your plan's rate-limit utilization. This is what fills the **Usage** section of the dropdown. *(This fork only — upstream has no usage feature and makes only call #1.)*
 
 - It sends your Claude Code OAuth token to Anthropic so they can identify your account. Nothing else is sent: no prompts, no files, no project paths, no conversation content.
-- The token is read at request time from `CLAUDE_CODE_OAUTH_TOKEN`, `~/.claude/.credentials.json`, or your Keychain — the same credentials Claude Code itself uses. It is never copied elsewhere, cached to disk, or logged.
+- The token is read at request time from `CLAUDE_CODE_OAUTH_TOKEN`, an optional `~/.claude/statusbar/token` file you create yourself (see the README tip), `~/.claude/.credentials.json`, or your Keychain — the same credentials Claude Code itself uses. The app never copies a token elsewhere, caches one to disk, or logs one.
 - Requests fire only when you press the refresh button in the dropdown's Usage header (at most one per 30 seconds). Nothing else — not launching the app, not opening the dropdown, no background timer. Turning off **Show usage** hides the section (and its button) entirely.
 - Anthropic sees these requests, as they do every Claude Code request. The developer never does.
 - The most recent utilization numbers (percentages and reset times, nothing else) are stored locally in the app's preferences so they can still be shown when a fetch fails. Signing out of Claude Code clears them.

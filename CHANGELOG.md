@@ -3,6 +3,15 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.11] - 2026-07-19
+
+### Added
+- **Opt-in token file kills the Keychain dialog for good.** Claude Code recreates its Keychain
+  item on every login, wiping the "Always Allow" grant — so the permission dialog kept returning.
+  If `~/.claude/statusbar/token` exists (create it with `claude setup-token`, see README), the
+  app uses it and never touches the Keychain. A 401 from a file token says so specifically
+  ("Token file rejected — re-run claude setup-token").
+
 ## [0.4.10] - 2026-07-19
 
 ### Changed

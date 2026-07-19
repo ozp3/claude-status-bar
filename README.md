@@ -32,6 +32,16 @@ Each successful refresh also writes `~/.claude/statusbar/usage-latest.json` — 
 
 Fetched from Anthropic's `/api/oauth/usage` — the same endpoint the Claude UI reads — only when you press the ⟳ button in the Usage header (30s cooldown). Nothing else fires a request: not launch, not opening the menu, no background timer ([privacy details](PRIVACY.md)). Between presses the bars show the last snapshot, labelled with its age.
 
+> [!TIP]
+> **Tired of the Keychain permission dialog?** Claude Code recreates its Keychain item on every login, which wipes the "Always Allow" grant — so the dialog keeps coming back. To silence it forever, create a long-lived token and drop it in a file the app checks first (no Keychain involved):
+> ```bash
+> claude setup-token          # complete the browser approval, copy the token it prints
+> mkdir -p ~/.claude/statusbar
+> pbpaste > ~/.claude/statusbar/token     # or paste it into the file another way
+> chmod 600 ~/.claude/statusbar/token
+> ```
+> Delete the file to go back to the normal credential chain. Same protection model as `~/.claude/.credentials.json`.
+
 Everything is controlled from the menu:
 
 - **Always show** *(this fork, on by default)*: keep the icon in the menu bar permanently, so usage is always a glance away. Turn it off to restore upstream's behavior (launches with Claude Code, quits when nothing's running).

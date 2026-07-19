@@ -424,8 +424,8 @@ final class StatusController: NSObject, NSMenuDelegate {
                 status = self.usageRowViews.count == self.usage.limits.count ? "updated" : "updated — reopen"
             } else if let rem = self.usage.retryRemaining {
                 status = "rate limited · \(self.retryText(rem))"
-            } else if self.usage.lastError?.hasPrefix("Token expired") == true {
-                status = "token expired"
+            } else if self.usage.lastError?.hasPrefix("Token") == true {
+                status = "token problem"
             } else if self.usage.lastError?.hasPrefix("Not signed in") == true {
                 status = "not signed in"
             } else {
@@ -550,7 +550,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         menuIsOpen = true
         // Local-only token re-check (file + Keychain reads, zero network): after a `claude`
         // login the "Token expired" note heals itself instead of waiting for a ⟳ press.
-        if usage.lastError?.hasPrefix("Token expired") == true || usage.lastError?.hasPrefix("Not signed in") == true {
+        if usage.lastError?.hasPrefix("Token") == true || usage.lastError?.hasPrefix("Not signed in") == true {
             DispatchQueue.global().async { [weak self] in
                 let state = UsageMonitor.loadToken()
                 DispatchQueue.main.async {

@@ -124,7 +124,7 @@ final class UsageMonitor {
     // keeps a still-unexpired-but-401ing token from clearing the note it caused.
     func clearTokenErrorIfFresh(_ token: String) {
         if let bad = badTokenTail, token.hasSuffix(bad) { return }
-        if lastError?.hasPrefix("Token expired") == true || lastError?.hasPrefix("Not signed in") == true {
+        if lastError?.hasPrefix("Token") == true || lastError?.hasPrefix("Not signed in") == true {
             lastError = nil
         }
     }
@@ -323,8 +323,11 @@ final class UsageMonitor {
                 holdFor = Double(http?.value(forHTTPHeaderField: "Retry-After") ?? "") ?? 60
             } else if code == 401 || code == 403 {
                 // The token died before its expiresAt (revoked/rotated server-side). Recover when
-                // Claude Code stores a fresh one; the badTokenTail gate stops repeats meanwhile.
-                failure = "Token expired — start a Claude Code session to refresh it"
+                // a fresh one appears; the badTokenTail gate stops repeats meanwhile. The advice
+                // depends on where the dead token came from.
+                failure = Self.lastTokenSource == "token file"
+                    ? "Token file rejected — re-run claude setup-token"
+                    : "Token expired — start a Claude Code session to refresh it"
             } else if code != 200 {
                 failure = "Usage unavailable (HTTP \(code))"
             } else if let data = data {
@@ -453,16 +456,39 @@ final class UsageMonitor {
         case missing
     }
 
+    // Opt-in long-lived token file (from `claude setup-token`). Checked before the shared
+    // credentials, so once it exists the Keychain is never touched — which is the whole point:
+    // Claude Code recreates its Keychain item on every login, wiping the "Always Allow" grant,
+    // so the permission dialog otherwise returns after each re-auth. A plain token file has no
+    // ACL to lose. Same protection model as ~/.claude/.credentials.json (0600, plaintext).
+    static var tokenFilePath = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/token")
+
+    // Which source produced the current token — lets a 401 say the right thing ("re-run
+    // claude setup-token" vs "start a Claude Code session").
+    private(set) static var lastTokenSource = ""
+
     // Same resolution order Claude Code itself uses, cheapest first — but expiry-checked. Firing
     // a request with an expired token is worse than useless: the 401 feeds an auth-failure
     // throttle that answered our very next request with a 60-minute 429 (see usage.log).
     static func loadToken() -> TokenState {
-        if let t = ProcessInfo.processInfo.environment["CLAUDE_CODE_OAUTH_TOKEN"], !t.isEmpty { return .valid(t) }
+        if let t = ProcessInfo.processInfo.environment["CLAUDE_CODE_OAUTH_TOKEN"], !t.isEmpty {
+            lastTokenSource = "env"
+            return .valid(t)
+        }
+        if let raw = try? String(contentsOfFile: tokenFilePath, encoding: .utf8) {
+            let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty {
+                lastTokenSource = "token file"
+                return .valid(t)
+            }
+        }
         var sawExpired = false
-        for data in [credentialsFileData(), keychainData()] {
+        for (source, data) in [("credentials file", credentialsFileData()), ("keychain", keychainData())] {
             guard let data = data else { continue }
             switch token(fromCredentialsJSON: data) {
-            case .valid(let t): return .valid(t)
+            case .valid(let t):
+                lastTokenSource = source
+                return .valid(t)
             case .expired: sawExpired = true
             case .missing: break
             }
