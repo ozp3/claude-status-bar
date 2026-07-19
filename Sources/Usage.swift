@@ -5,7 +5,7 @@ import Cocoa
 // this tells us how much of the plan is LEFT. The only account data that leaves the machine
 // is the OAuth token, sent to Anthropic (never to us) — see PRIVACY.md.
 
-struct UsageLimit {
+struct UsageLimit: Codable {
     let label: String
     let percent: Int
     let resetsAt: Date?
@@ -69,7 +69,36 @@ final class UsageMonitor {
         // are exactly when a blind launch fetch would fire into it. Without persistence, every
         // quit-and-revive cycle extended the penalty (observed climbing 161s → 1671s → 60m).
         retryAfter = UserDefaults.standard.double(forKey: "usageRetryUntil")
+        // The last good numbers survive too, so a process born under a rate-limit penalty still
+        // shows bars (stale, and labelled as such) instead of a bare "Rate limited" note.
+        if let data = UserDefaults.standard.data(forKey: "usageCache"),
+           let cached = try? Self.cacheDecoder.decode([UsageLimit].self, from: data), !cached.isEmpty {
+            limits = cached
+            dataAt = UserDefaults.standard.double(forKey: "usageCacheAt")
+        }
     }
+
+    // When the shown numbers were actually fetched (now for live data, the stored stamp for a
+    // restored cache). 0 = never had data.
+    private(set) var dataAt: Double = 0
+
+    // "3h old" etc. for the note row — only when the data is old enough that pretending it's
+    // current would mislead (past one cooldown-ish window).
+    var dataAgeText: String? {
+        guard dataAt > 0, hasData else { return nil }
+        let age = Int(Date().timeIntervalSince1970 - dataAt)
+        guard age > 900 else { return nil }
+        if age >= 86400 { return "\(age / 86400)d old" }
+        if age >= 3600 { return "\(age / 3600)h old" }
+        return "\(age / 60)m old"
+    }
+
+    private static let cacheEncoder: JSONEncoder = {
+        let e = JSONEncoder(); e.dateEncodingStrategy = .secondsSince1970; return e
+    }()
+    private static let cacheDecoder: JSONDecoder = {
+        let d = JSONDecoder(); d.dateDecodingStrategy = .secondsSince1970; return d
+    }()
 
     var hasData: Bool { !limits.isEmpty }
 
@@ -87,8 +116,13 @@ final class UsageMonitor {
         // token roughly hourly and rewrites the credentials file, so a cached copy goes 401 stale.
         guard let token = Self.loadToken() else {
             limits = []
+            dataAt = 0
             lastError = "Not signed in to Claude Code"
             lastFetch = Date().timeIntervalSince1970
+            // Signed out: drop the persisted snapshot too, or a later sign-in under a different
+            // account would resurrect the previous account's numbers.
+            UserDefaults.standard.removeObject(forKey: "usageCache")
+            UserDefaults.standard.removeObject(forKey: "usageCacheAt")
             onUpdate?()
             return
         }
@@ -134,7 +168,12 @@ final class UsageMonitor {
                 if let parsed = parsed {
                     self.limits = parsed
                     self.lastError = nil
+                    self.dataAt = self.lastFetch
                     UserDefaults.standard.removeObject(forKey: "usageRetryUntil")
+                    if let enc = try? Self.cacheEncoder.encode(parsed) {
+                        UserDefaults.standard.set(enc, forKey: "usageCache")
+                        UserDefaults.standard.set(self.dataAt, forKey: "usageCacheAt")
+                    }
                 } else if holdFor > 0 {
                     self.lastError = nil   // 429: retryRemaining carries the note instead
                 } else {

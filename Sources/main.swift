@@ -626,7 +626,11 @@ final class StatusController: NSObject, NSMenuDelegate {
                 }
                 // A stale-data note only when a refresh is actually failing — the rows above are
                 // the last good numbers, and silently showing them as current would be a lie.
-                if let note = holdNote ?? usage.lastError { menu.addItem(usageNoteRow(note, width: width)) }
+                // The age suffix appears once the data is old enough to mislead (>15 min).
+                if let note = holdNote ?? usage.lastError {
+                    let suffix = usage.dataAgeText.map { " · data \($0)" } ?? ""
+                    menu.addItem(usageNoteRow(note + suffix, width: width))
+                }
             } else {
                 menu.addItem(usageNoteRow(holdNote ?? usage.lastError ?? "Loading…", width: width))
             }

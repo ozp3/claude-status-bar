@@ -3,6 +3,14 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.2] - 2026-07-19
+
+### Added
+- **Stale usage stays visible while rate-limited.** The last good numbers are persisted locally,
+  so a process that starts under a 429 penalty (or any fetch failure) still shows the bars from
+  the previous successful fetch, with the rate-limit note beneath them. When the data is more
+  than 15 minutes old the note says so ("· data 3h old"). Signing out clears the snapshot.
+
 ## [0.4.1] - 2026-07-19
 
 ### Added
