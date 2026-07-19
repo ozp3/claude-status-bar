@@ -3,6 +3,26 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-07-20
+
+### Added
+- **Sign in with Claude.** The app can now hold its own session: a standard OAuth
+  authorization-code + PKCE flow (same public client Claude Code uses) driven from the dropdown —
+  one browser approval, then the app stores its own token pair in `~/.claude/statusbar/oauth.json`
+  (0600) and refreshes it itself. This removes the entire class of credential friction: no
+  Keychain reads, so no permission dialogs — not on first use, not after `claude` re-logins, not
+  after app updates — and no dependence on Claude Code's login state, so "Token expired" stops
+  being a user-visible problem. "Sign out of usage" in Options deletes the session.
+- The own-session token wins over every borrowed source; the borrowed chain (env → token file →
+  credentials file → Keychain) remains as the zero-setup fallback.
+- Token refreshes happen only inside a user-triggered ⟳ press (or right after sign-in); menu
+  opens still fire nothing.
+
+### Notes
+- The flow mirrors Claude Code's own (not a documented public API); if it changes upstream,
+  Sources/OAuth.swift is the blast radius. PKCE is verified end-to-end in tests against a local
+  mock (RFC 7636 vector included); no test touches Anthropic infrastructure.
+
 ## [0.4.12] - 2026-07-20
 
 ### Added

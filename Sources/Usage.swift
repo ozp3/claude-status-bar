@@ -327,9 +327,17 @@ final class UsageMonitor {
                 // depends on where the dead token came from.
                 // A 403 on a well-formed setup-token file means that token CLASS can't read this
                 // endpoint (observed) — retrying or recreating it won't help; the file must go.
-                failure = Self.lastTokenSource == "token file"
-                    ? "Token file not accepted here — delete ~/.claude/statusbar/token"
-                    : "Token expired — start a Claude Code session to refresh it"
+                switch Self.lastTokenSource {
+                case "app sign-in":
+                    // Our own access token died early (server-side rotation). Force the next
+                    // press to run the refresh grant instead of replaying the dead token.
+                    ClaudeOAuth.forceExpire()
+                    failure = "Session hiccup — press ⟳ again"
+                case "token file":
+                    failure = "Token file not accepted here — delete ~/.claude/statusbar/token"
+                default:
+                    failure = "Token expired — start a Claude Code session to refresh it"
+                }
             } else if code != 200 {
                 failure = "Usage unavailable (HTTP \(code))"
             } else if let data = data {
@@ -473,6 +481,13 @@ final class UsageMonitor {
     // a request with an expired token is worse than useless: the 401 feeds an auth-failure
     // throttle that answered our very next request with a 60-minute 429 (see usage.log).
     static func loadToken() -> TokenState {
+        // The app's OWN sign-in wins over everything borrowed: no Keychain, self-refreshing.
+        // usableAccessToken may hit the network (refresh grant) — loadToken is only ever called
+        // from the user-triggered fetch path, on a background queue.
+        if let t = ClaudeOAuth.usableAccessToken() {
+            lastTokenSource = "app sign-in"
+            return .valid(t)
+        }
         if let t = ProcessInfo.processInfo.environment["CLAUDE_CODE_OAUTH_TOKEN"], !t.isEmpty {
             lastTokenSource = "env"
             return .valid(t)

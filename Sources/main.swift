@@ -551,12 +551,19 @@ final class StatusController: NSObject, NSMenuDelegate {
         // Local-only token re-check (file + Keychain reads, zero network): after a `claude`
         // login the "Token expired" note heals itself instead of waiting for a ⟳ press.
         if usage.lastError?.hasPrefix("Token") == true || usage.lastError?.hasPrefix("Not signed in") == true {
-            DispatchQueue.global().async { [weak self] in
-                let state = UsageMonitor.loadToken()
-                DispatchQueue.main.async {
-                    guard let self = self, case .valid(let tok) = state else { return }
-                    self.usage.clearTokenErrorIfFresh(tok)
-                    if self.usage.lastError == nil { self.usageNoteField?.stringValue = "Token OK — press ⟳" }
+            // Network-free healing only: an own-session file check, else the legacy disk chain.
+            // Actual token refresh happens exclusively on the ⟳ press.
+            if ClaudeOAuth.hasUsableSession {
+                usage.clearTokenErrorIfFresh("")
+                if usage.lastError == nil { usageNoteField?.stringValue = "Signed in — press ⟳" }
+            } else {
+                DispatchQueue.global().async { [weak self] in
+                    let state = UsageMonitor.loadToken()
+                    DispatchQueue.main.async {
+                        guard let self = self, case .valid(let tok) = state else { return }
+                        self.usage.clearTokenErrorIfFresh(tok)
+                        if self.usage.lastError == nil { self.usageNoteField?.stringValue = "Token OK — press ⟳" }
+                    }
                 }
             }
         }
@@ -567,10 +574,50 @@ final class StatusController: NSObject, NSMenuDelegate {
     // place, no permission dialog). A .command file via NSWorkspace needs no Automation consent,
     // unlike scripting Terminal with AppleScript. Shown only while the note is token-related.
     func addTokenFixItem(ifNeededTo menu: NSMenu) {
-        guard usage.lastError?.hasPrefix("Token expired") == true || usage.lastError?.hasPrefix("Not signed in") == true else { return }
-        let it = NSMenuItem(title: "Refresh Claude token…", action: #selector(refreshClaudeToken), keyEquivalent: "")
-        it.target = self
-        menu.addItem(it)
+        guard usage.lastError?.hasPrefix("Token") == true || usage.lastError?.hasPrefix("Not signed in") == true
+              || usage.lastError?.hasPrefix("Session") == true else { return }
+        // Primary fix: the app's own sign-in — one browser approval, then the app refreshes its
+        // own tokens forever and the Keychain is out of the picture entirely.
+        let signIn = NSMenuItem(title: signInFlow == nil ? "Sign in with Claude…" : "Waiting for browser sign-in…",
+                                action: signInFlow == nil ? #selector(startSignIn) : nil, keyEquivalent: "")
+        signIn.target = self
+        menu.addItem(signIn)
+        // Legacy crutch, only relevant while still borrowing Claude Code's credentials.
+        if !ClaudeOAuth.hasUsableSession {
+            let it = NSMenuItem(title: "Refresh Claude token…", action: #selector(refreshClaudeToken), keyEquivalent: "")
+            it.target = self
+            menu.addItem(it)
+        }
+    }
+
+    var signInFlow: ClaudeOAuth.Flow?
+
+    @objc func startSignIn() {
+        guard signInFlow == nil else { return }
+        let flow = ClaudeOAuth.Flow()
+        flow.onDone = { [weak self] error in
+            guard let self = self else { return }
+            self.signInFlow = nil
+            if let error = error {
+                self.usageHeader?.showStatus(error.lowercased())
+            } else {
+                // Signing in IS user intent to see usage — fetch immediately with the new session.
+                self.usage.refresh(trigger: "signin")
+            }
+        }
+        do {
+            try flow.start()
+            signInFlow = flow
+            NSWorkspace.shared.open(flow.authorizeURL())
+        } catch {
+            UsageLog.log("signin: could not open callback port — \(error.localizedDescription)")
+            usageHeader?.showStatus("port busy — try again")
+        }
+    }
+
+    @objc func signOutUsage() {
+        ClaudeOAuth.signOut()
+        UsageLog.log("signout: own session removed")
     }
 
     @objc func refreshClaudeToken() {
@@ -790,6 +837,11 @@ final class StatusController: NSObject, NSMenuDelegate {
         menu.addItem(colorParent)
 
         menu.addItem(.separator())
+        if ClaudeOAuth.loadSession() != nil {
+            let so = NSMenuItem(title: "Sign out of usage", action: #selector(signOutUsage), keyEquivalent: "")
+            so.target = self
+            menu.addItem(so)
+        }
         let logItem = NSMenuItem(title: "Open usage log", action: #selector(openUsageLog), keyEquivalent: "")
         logItem.target = self
         menu.addItem(logItem)

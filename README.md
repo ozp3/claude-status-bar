@@ -32,10 +32,8 @@ Each successful refresh also writes `~/.claude/statusbar/usage-latest.json` — 
 
 Fetched from Anthropic's `/api/oauth/usage` — the same endpoint the Claude UI reads — only when you press the ⟳ button in the Usage header (30s cooldown). Nothing else fires a request: not launch, not opening the menu, no background timer ([privacy details](PRIVACY.md)). Between presses the bars show the last snapshot, labelled with its age.
 
-> [!NOTE]
-> **About the Keychain permission dialog:** it only appears after a full `claude` re-login (which recreates the Keychain item, wiping the "Always Allow" grant) or after updating this app (the ad-hoc signature changes). Routine silent token rotations update the item in place and never prompt. When the token has expired entirely, the dropdown shows a **Refresh Claude token…** item that opens Terminal running `claude` for you — its startup refreshes the stored token, and the note heals itself.
->
-> (Tokens from `claude setup-token` do **not** work for this: the usage endpoint answers them with 403. The `~/.claude/statusbar/token` file override exists, but only for tokens that endpoint actually accepts.)
+> [!TIP]
+> **Recommended: Sign in with Claude.** The dropdown offers **Sign in with Claude…** — one browser approval, and the app holds its own token pair (stored in a 0600 file, self-refreshing). After that there are **no Keychain permission dialogs, ever**, and no dependence on Claude Code's login state. Without signing in, the app borrows Claude Code's stored credentials, which works but brings the occasional Keychain dialog (after full re-logins and app updates).
 
 Everything is controlled from the menu:
 
