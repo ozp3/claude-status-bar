@@ -34,7 +34,8 @@ Fetched from Anthropic's `/api/oauth/usage` — the same endpoint the Claude UI 
 
 Everything is controlled from the menu:
 
-- **Always show** *(this fork, on by default)*: keep the icon in the menu bar permanently and start it at login, so usage is always a glance away. Turn it off to restore upstream's behavior (launches with Claude Code, quits when nothing's running).
+- **Always show** *(this fork, on by default)*: keep the icon in the menu bar permanently, so usage is always a glance away. Turn it off to restore upstream's behavior (launches with Claude Code, quits when nothing's running).
+- **Start at login** *(this fork, on by default)*: bring the app back automatically after a reboot (macOS 13+; shows up in System Settings → Login Items).
 - **Show usage:** toggle the usage section (off = no usage requests at all).
 - **Alert at 90%:** macOS notification when a refresh finds a limit at 90%+ (once per reset window).
 - **Open usage log:** one click to the local fetch/rate-limit log.

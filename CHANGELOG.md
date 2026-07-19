@@ -3,6 +3,14 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.10] - 2026-07-19
+
+### Changed
+- **"Start at login" is its own toggle.** Login-item registration used to piggyback on "Always
+  show"; the two are separate promises (staying up this boot vs coming back after the next one),
+  so they're separate switches now. Existing installs inherit their previous effective state —
+  nobody's login items change under them.
+
 ## [0.4.9] - 2026-07-19
 
 Quality-of-life batch. Nothing here adds a request path: everything below runs off the cache,

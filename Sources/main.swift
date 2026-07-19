@@ -320,6 +320,10 @@ final class StatusController: NSObject, NSMenuDelegate {
     // icon up permanently by default: with the usage section it still says something useful when no
     // session is alive, and an icon that vanishes is a worse place to check your remaining quota.
     var alwaysShow = true
+    // Separate from alwaysShow: staying up THIS boot and coming back after the NEXT one are
+    // different promises, and the user may want either without the other. Defaults to whatever
+    // alwaysShow was, so existing installs keep their effective behavior (see init).
+    var startAtLogin = true
     var iconSystem = false // false = brand Orange; true = adaptive black/white (template image)
     var useThinkingWords = true     // rotate a playful verb ("Manifesting…") in place of "Thinking…"
     var sessionWord: [String: String] = [:] // id -> current thinking word; re-picked on each entry into "thinking"
@@ -383,6 +387,9 @@ final class StatusController: NSObject, NSMenuDelegate {
         if d.object(forKey: "showTimer") != nil { showTimer = d.bool(forKey: "showTimer") }
         if d.object(forKey: "showUsage") != nil { showUsage = d.bool(forKey: "showUsage") }
         if d.object(forKey: "alwaysShow") != nil { alwaysShow = d.bool(forKey: "alwaysShow") }
+        // Migration: before 0.4.10 the login item followed alwaysShow, so inherit that when the
+        // dedicated key has never been written — nobody's login items change under them.
+        startAtLogin = d.object(forKey: "startAtLogin") != nil ? d.bool(forKey: "startAtLogin") : alwaysShow
         if d.object(forKey: "iconSystem") != nil { iconSystem = d.bool(forKey: "iconSystem") }
         if d.object(forKey: "thinkingWords") != nil { useThinkingWords = d.bool(forKey: "thinkingWords") }
         if let s = d.string(forKey: "animStyle"), let st = AnimStyle(rawValue: s) { animStyle = st }
@@ -694,13 +701,18 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
 
         menu.addItem(header("Options"))
-        menu.addItem(toggleRow(title: "Always show", qualifier: "at login", isOn: alwaysShow) { [weak self] on in
+        menu.addItem(toggleRow(title: "Always show", isOn: alwaysShow) { [weak self] on in
             guard let self = self else { return }
             self.alwaysShow = on
             UserDefaults.standard.set(on, forKey: "alwaysShow")
-            self.syncLoginItem()
             // Turning it off hands the app back to the normal lifecycle: the next tick starts the
             // grace period, and it quits if nothing needs it.
+        })
+        menu.addItem(toggleRow(title: "Start at login", isOn: startAtLogin) { [weak self] on in
+            guard let self = self else { return }
+            self.startAtLogin = on
+            UserDefaults.standard.set(on, forKey: "startAtLogin")
+            self.syncLoginItem()
         })
         menu.addItem(toggleRow(title: "Show usage", isOn: showUsage) { [weak self] on in
             guard let self = self else { return }
@@ -1222,27 +1234,26 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     // MARK: login item
 
-    // Half of "always show": not quitting keeps the icon up for this boot, registering as a login
-    // item brings it back after the next one. Without this the icon would still disappear on every
-    // restart until the first Claude Code session launched it.
+    // Registering as a login item brings the icon back after a reboot; driven by the dedicated
+    // "Start at login" toggle (it used to piggyback on "Always show").
     //
-    // SMAppService is macOS 13+. On 12 this is a no-op: the app still refuses to self-quit, it just
-    // won't come back by itself after a reboot (documented in the README).
+    // SMAppService is macOS 13+. On 12 this is a no-op: the toggle just has no effect across
+    // reboots (documented in the README).
     func syncLoginItem() {
         guard #available(macOS 13.0, *) else { return }
         let service = SMAppService.mainApp
         do {
             // Registering an already-registered service throws, so only act on a real mismatch.
-            if alwaysShow, service.status != .enabled {
+            if startAtLogin, service.status != .enabled {
                 try service.register()
-            } else if !alwaysShow, service.status == .enabled {
+            } else if !startAtLogin, service.status == .enabled {
                 try service.unregister()
             }
         } catch {
             // Not fatal: the user may have denied it in System Settings, and everything else about
             // "always show" still works. Logged rather than surfaced — there's no good menu bar UI
             // for it, and macOS already shows its own notification when a login item is added.
-            NSLog("ClaudeStatusBar: login item \(alwaysShow ? "register" : "unregister") failed: \(error)")
+            NSLog("ClaudeStatusBar: login item \(startAtLogin ? "register" : "unregister") failed: \(error)")
         }
     }
 
