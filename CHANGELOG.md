@@ -3,6 +3,26 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.9] - 2026-07-19
+
+Quality-of-life batch. Nothing here adds a request path: everything below runs off the cache,
+local files, or the fetches the user already triggers with ⟳.
+
+### Added
+- **Menu bar warning dot** when any cached limit is ≥90% — a small red dot on the icon, cleared
+  when a fresh fetch shows the limit back under threshold. Adaptive icon colors are preserved.
+- **Notification at 90%**, piggybacked on user-triggered refreshes: crossing the threshold posts
+  one macOS notification per limit per reset window. Toggle: "Alert at 90%" (on by default).
+- **The "Token expired" note heals itself.** Opening the menu re-checks stored credentials
+  locally (file + Keychain, zero network); after a `claude` login the note flips to
+  "Token OK — press ⟳" without waiting for a press.
+- **"Open usage log" menu item** — one click instead of tailing the file in a terminal.
+- **`usage-latest.json`** written on every successful fetch, for tmux/sketchybar/scripts:
+  consumers read the file, so integrations cost zero requests.
+- **~24h change chips** in the rows ("▲16"): each successful fetch is recorded to a local
+  history file (capped ~1000 entries), and rows show the change against the snapshot nearest
+  24h back once one exists.
+
 ## [0.4.8] - 2026-07-19
 
 ### Fixed

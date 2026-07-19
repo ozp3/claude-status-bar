@@ -14,6 +14,7 @@ It makes two kinds of network call, both to third parties, never to the develope
 - Anthropic sees these requests, as they do every Claude Code request. The developer never does.
 - The most recent utilization numbers (percentages and reset times, nothing else) are stored locally in the app's preferences so they can still be shown when a fetch fails. Signing out of Claude Code clears them.
 - A small local log of usage-fetch attempts (timestamps, trigger, HTTP outcome, durations — no account data) is kept at `~/.claude/statusbar/usage.log` (capped at 128KB) to diagnose rate-limit behavior. It never leaves your machine.
+- Two more local files, written on each successful fetch and never read back over the network: `usage-latest.json` (the current percentages, for your own scripts/status bars) and `usage-history.jsonl` (past percentages, capped ~1000 entries, for the ~24h change chips). Both live in `~/.claude/statusbar/` and contain only labels, percentages, and reset times.
 
 ---
 Back to the [README](README.md).

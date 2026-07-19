@@ -1,4 +1,5 @@
 import Cocoa
+import UserNotifications
 
 // Plan-limit utilization, read from the same /api/oauth/usage endpoint the Claude UI uses.
 // Entirely separate from the hook-driven session state: hooks tell us what Claude is DOING,
@@ -114,6 +115,18 @@ final class UsageMonitor {
         if let rem = retryRemaining {
             UsageLog.log("init: restored 429 hold (\(rem)s left), cache: \(limits.isEmpty ? "none" : "\(limits.count) limits, \(dataAgeText ?? "fresh")")")
         }
+        history = Self.loadHistory()
+    }
+
+    // Clears a token-related error when a genuinely fresh token has appeared on disk — called
+    // from a purely LOCAL check (file + Keychain read, no network) so the "Token expired" note
+    // heals itself after a `claude` login without needing a ⟳ press. The badTokenTail guard
+    // keeps a still-unexpired-but-401ing token from clearing the note it caused.
+    func clearTokenErrorIfFresh(_ token: String) {
+        if let bad = badTokenTail, token.hasSuffix(bad) { return }
+        if lastError?.hasPrefix("Token expired") == true || lastError?.hasPrefix("Not signed in") == true {
+            lastError = nil
+        }
     }
 
     // When the shown numbers were actually fetched (now for live data, the stored stamp for a
@@ -139,6 +152,79 @@ final class UsageMonitor {
     }()
 
     var hasData: Bool { !limits.isEmpty }
+
+    // Highest utilization across every limit — drives the menu bar warning badge. Computed from
+    // whatever is cached; never triggers a request.
+    var worstPercent: Int? { limits.map(\.percent).max() }
+
+    // MARK: history (local only)
+
+    // One line per successful fetch: {"ts": epoch, "p": {"Session": 36, ...}}. Feeds the ~24h
+    // delta chips in the rows. Sparse by design — fetches are manual — so deltas are best-effort.
+    static var historyPath = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/usage-history.jsonl")
+    private(set) var history: [(ts: Double, percents: [String: Int])] = []
+
+    static func loadHistory() -> [(ts: Double, percents: [String: Int])] {
+        guard let raw = try? String(contentsOfFile: historyPath, encoding: .utf8) else { return [] }
+        return raw.split(separator: "\n").compactMap { line in
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  let ts = (obj["ts"] as? NSNumber)?.doubleValue,
+                  let p = obj["p"] as? [String: NSNumber] else { return nil }
+            return (ts, p.mapValues { $0.intValue })
+        }
+    }
+
+    private func recordHistory(_ parsed: [UsageLimit], at ts: Double) {
+        let entry: [String: Any] = ["ts": ts, "p": Dictionary(uniqueKeysWithValues: parsed.map { ($0.label, $0.percent) })]
+        history.append((ts, entry["p"] as! [String: Int]))
+        guard let data = try? JSONSerialization.data(withJSONObject: entry) else { return }
+        // Append; rewrite keeping the newest 500 once past 1000 so the file can't grow unbounded.
+        if history.count > 1000 {
+            history = Array(history.suffix(500))
+            let lines = history.compactMap { h -> String? in
+                guard let d = try? JSONSerialization.data(withJSONObject: ["ts": h.ts, "p": h.percents]) else { return nil }
+                return String(data: d, encoding: .utf8)
+            }
+            try? (lines.joined(separator: "\n") + "\n").write(toFile: Self.historyPath, atomically: true, encoding: .utf8)
+        } else if let fh = FileHandle(forWritingAtPath: Self.historyPath) {
+            defer { try? fh.close() }
+            _ = try? fh.seekToEnd()
+            try? fh.write(contentsOf: data + Data("\n".utf8))
+        } else {
+            try? (String(data: data, encoding: .utf8)! + "\n").write(toFile: Self.historyPath, atomically: true, encoding: .utf8)
+        }
+    }
+
+    // Change vs ~24h ago (nearest snapshot 20–28h back). Nil when history doesn't reach that far,
+    // or the label wasn't recorded then (e.g. a model-scoped cap that appeared today).
+    func dayDelta(for label: String, percent: Int, now: Double = Date().timeIntervalSince1970) -> Int? {
+        let candidates = history.filter { now - $0.ts >= 20 * 3600 && now - $0.ts <= 28 * 3600 }
+        guard let best = candidates.min(by: { abs(now - $0.ts - 86400) < abs(now - $1.ts - 86400) }),
+              let old = best.percents[label] else { return nil }
+        let d = percent - old
+        return d == 0 ? nil : d
+    }
+
+    // MARK: export (local only)
+
+    // Machine-readable snapshot for tmux/sketchybar/scripts — written on every successful fetch,
+    // never read by the app itself. Consumers poll the FILE, so they cost zero requests.
+    static var exportPath = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/usage-latest.json")
+
+    private static let isoOut: ISO8601DateFormatter = ISO8601DateFormatter()
+
+    private func writeExport(_ parsed: [UsageLimit], at ts: Double) {
+        let obj: [String: Any] = [
+            "fetched_at": Self.isoOut.string(from: Date(timeIntervalSince1970: ts)),
+            "limits": parsed.map { l -> [String: Any] in
+                var row: [String: Any] = ["label": l.label, "percent": l.percent, "severity": l.severity]
+                if let r = l.resetsAt { row["resets_at"] = Self.isoOut.string(from: r) }
+                return row
+            },
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]) else { return }
+        try? data.write(to: URL(fileURLWithPath: Self.exportPath), options: .atomic)
+    }
 
     // Poll cadence is generous: utilization moves in percent points over minutes, and the
     // dropdown refreshes on open anyway, so anything tighter is wasted requests.
@@ -276,6 +362,11 @@ final class UsageMonitor {
                     if let enc = try? Self.cacheEncoder.encode(parsed) {
                         UserDefaults.standard.set(enc, forKey: "usageCache")
                         UserDefaults.standard.set(self.dataAt, forKey: "usageCacheAt")
+                    }
+                    self.recordHistory(parsed, at: self.dataAt)
+                    self.writeExport(parsed, at: self.dataAt)
+                    if UserDefaults.standard.object(forKey: "alertHighUsage") as? Bool ?? true {
+                        UsageAlerts.check(parsed)
                     }
                 } else if holdFor > 0 {
                     self.lastError = nil   // 429: retryRemaining carries the note instead
@@ -453,7 +544,7 @@ final class UsageRowView: NSView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func configure(_ limit: UsageLimit) {
+    func configure(_ limit: UsageLimit, dayDelta: Int? = nil) {
         // Label in the normal color, the reset countdown dimmed after it — same treatment the
         // session rows give "name · branch", so the two sections read as one list.
         let font = NSFont.menuFont(ofSize: 0)
@@ -463,12 +554,16 @@ final class UsageRowView: NSView {
         let text = NSMutableAttributedString(string: limit.label, attributes: [
             .font: font, .paragraphStyle: para, .foregroundColor: NSColor.labelColor,
         ])
+        let small: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: font.pointSize - 2),
+            .paragraphStyle: para, .foregroundColor: NSColor.secondaryLabelColor,
+        ]
         let reset = limit.resetText
-        if !reset.isEmpty {
-            text.append(NSAttributedString(string: " · " + reset, attributes: [
-                .font: NSFont.systemFont(ofSize: font.pointSize - 2),
-                .paragraphStyle: para, .foregroundColor: NSColor.secondaryLabelColor,
-            ]))
+        if !reset.isEmpty { text.append(NSAttributedString(string: " · " + reset, attributes: small)) }
+        // ~24h change, when history reaches that far: "▲12" = twelve points more used than
+        // yesterday. Same dimmed style as the reset — informational, not an alarm.
+        if let d = dayDelta {
+            text.append(NSAttributedString(string: " · \(d > 0 ? "▲" : "▼")\(abs(d))", attributes: small))
         }
         labelField.attributedStringValue = text
         percentField.stringValue = "\(limit.percent)%"
@@ -491,6 +586,46 @@ final class UsageRowView: NSView {
     override func layout() {
         super.layout()
         layoutBar(percent: lastPercent)   // the track autoresizes with the menu; the fill doesn't
+    }
+}
+
+// High-usage alerts, piggybacked on user-triggered fetches — this file never initiates a
+// request. One notification per (limit, reset window): the same limit re-crossing 90% inside
+// the same window stays quiet, but fires again after its reset.
+enum UsageAlerts {
+    static let threshold = 90
+
+    // Pure dedupe logic, separated so it's testable without touching UNUserNotificationCenter.
+    static func dueAlerts(_ limits: [UsageLimit], seen: [String: Double]) -> (due: [UsageLimit], seen: [String: Double]) {
+        var seen = seen, due: [UsageLimit] = []
+        for l in limits where l.percent >= threshold {
+            let window = l.resetsAt?.timeIntervalSince1970 ?? 0
+            if seen[l.label] == window { continue }
+            seen[l.label] = window
+            due.append(l)
+        }
+        return (due, seen)
+    }
+
+    static func check(_ limits: [UsageLimit]) {
+        let d = UserDefaults.standard
+        let prior = (d.dictionary(forKey: "usageAlerted") as? [String: Double]) ?? [:]
+        let (due, seen) = dueAlerts(limits, seen: prior)
+        guard !due.isEmpty else { return }
+        d.set(seen, forKey: "usageAlerted")
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { granted, err in
+            if let err = err { UsageLog.log("alert: authorization error — \(err.localizedDescription)"); return }
+            guard granted else { UsageLog.log("alert: notifications not authorized"); return }
+            for l in due {
+                let content = UNMutableNotificationContent()
+                content.title = "Claude usage at \(l.percent)%"
+                content.body = "\(l.label) — \(l.resetText)"
+                center.add(UNNotificationRequest(identifier: "usage-\(l.label)", content: content, trigger: nil)) { e in
+                    UsageLog.log("alert: \(l.label) \(l.percent)% \(e == nil ? "delivered" : "FAILED — \(e!.localizedDescription)")")
+                }
+            }
+        }
     }
 }
 

@@ -26,7 +26,9 @@ A tiny macOS menu bar app that shows **Claude Code's live status**: an animated 
 - **Awaiting permission** — a paused yellow dot, in both the CLI and the Desktop app.
 - **Idle / done** — rests on the Claude logo.
 
-**Usage** *(this fork)* — the dropdown also lists your plan's rate-limit utilization: the 5-hour session window, the weekly cap, and any model-scoped weekly caps, each with a bar, a percentage, and when it resets. The colour turns amber past 75% and red past 90%. The menu bar icon itself is unchanged, so this costs no space up top.
+**Usage** *(this fork)* — the dropdown also lists your plan's rate-limit utilization: the 5-hour session window, the weekly cap, and any model-scoped weekly caps, each with a bar, a percentage, when it resets, and (once a day of history exists) a small ▲/▼ chip showing the change vs ~24h ago. The colour turns amber past 75% and red past 90%. When any limit is at 90%+ the menu bar icon gains a small red dot; opening the menu shows which one. Crossing 90% also posts a macOS notification, once per limit per reset window (toggle: **Alert at 90%**).
+
+Each successful refresh also writes `~/.claude/statusbar/usage-latest.json` — point your tmux/sketchybar/script at that file for zero extra requests.
 
 Fetched from Anthropic's `/api/oauth/usage` — the same endpoint the Claude UI reads — only when you press the ⟳ button in the Usage header (30s cooldown). Nothing else fires a request: not launch, not opening the menu, no background timer ([privacy details](PRIVACY.md)). Between presses the bars show the last snapshot, labelled with its age.
 
@@ -34,6 +36,8 @@ Everything is controlled from the menu:
 
 - **Always show** *(this fork, on by default)*: keep the icon in the menu bar permanently and start it at login, so usage is always a glance away. Turn it off to restore upstream's behavior (launches with Claude Code, quits when nothing's running).
 - **Show usage:** toggle the usage section (off = no usage requests at all).
+- **Alert at 90%:** macOS notification when a refresh finds a limit at 90%+ (once per reset window).
+- **Open usage log:** one click to the local fetch/rate-limit log.
 - **Show timer:** toggle the elapsed `1m 1s` clock.
 - **Thinking words:** rotate a playful verb (`Manifesting…`, `Percolating…`) in place of `Thinking…`, like Claude Code (on by default).
 - **Animation style:**

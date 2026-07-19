@@ -302,6 +302,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     let usage = UsageMonitor()
     var usageRowViews: [UsageRowView] = []   // kept so a fetch landing mid-open can redraw in place
     weak var usageHeader: UsageHeaderView?   // for spinner/status feedback; the menu item owns the view
+    weak var usageNoteField: NSTextField?    // so the local token re-check can heal the note in place
     var activeBase = ""        // label without the elapsed clock
     var startedAt: Double = 0  // unix seconds the current turn began (0 = no clock)
     var activeColor: NSColor? = nil
@@ -424,6 +425,9 @@ final class StatusController: NSObject, NSMenuDelegate {
                 status = "couldn't update"
             }
             self.usageHeader?.endSpin(status: status)
+            // A fresh result can flip the ≥90% warning badge either way — force a repaint.
+            self.lastRenderKey = nil
+            self.evaluate()
         }
     }
 
@@ -431,7 +435,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     // landing mid-open only restyles the existing rows (and is skipped if the count moved).
     func refreshOpenUsageRows() {
         guard usageRowViews.count == usage.limits.count else { return }
-        for (view, limit) in zip(usageRowViews, usage.limits) { view.configure(limit) }
+        for (view, limit) in zip(usageRowViews, usage.limits) { view.configure(limit, dayDelta: usage.dayDelta(for: limit.label, percent: limit.percent)) }
     }
 
     // Re-runs on first install AND on every version change, so upgrades pick up hook
@@ -537,12 +541,31 @@ final class StatusController: NSObject, NSMenuDelegate {
     // to live-update the per-session elapsed clocks. menuNeedsUpdate rebuilds the rows on each open.
     func menuWillOpen(_ menu: NSMenu) {
         menuIsOpen = true
+        // Local-only token re-check (file + Keychain reads, zero network): after a `claude`
+        // login the "Token expired" note heals itself instead of waiting for a ⟳ press.
+        if usage.lastError?.hasPrefix("Token expired") == true || usage.lastError?.hasPrefix("Not signed in") == true {
+            DispatchQueue.global().async { [weak self] in
+                let state = UsageMonitor.loadToken()
+                DispatchQueue.main.async {
+                    guard let self = self, case .valid(let tok) = state else { return }
+                    self.usage.clearTokenErrorIfFresh(tok)
+                    if self.usage.lastError == nil { self.usageNoteField?.stringValue = "Token OK — press ⟳" }
+                }
+            }
+        }
+    }
+
+    func addUsageNote(_ text: String, width: CGFloat, to menu: NSMenu) {
+        let it = usageNoteRow(text, width: width)
+        usageNoteField = it.view?.subviews.compactMap { $0 as? NSTextField }.first
+        menu.addItem(it)
     }
     func menuDidClose(_ menu: NSMenu) {
         menuIsOpen = false
         sessionMenuItems.removeAll()
         usageRowViews.removeAll()
         usageHeader = nil
+        usageNoteField = nil
     }
 
     // The session SET only changes on reopen (NSMenu can't add/remove rows reliably mid-track).
@@ -649,7 +672,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             if usage.hasData {
                 for limit in usage.limits {
                     let view = UsageRowView(width: width)
-                    view.configure(limit)
+                    view.configure(limit, dayDelta: usage.dayDelta(for: limit.label, percent: limit.percent))
                     let it = NSMenuItem()
                     it.view = view
                     menu.addItem(it)
@@ -660,12 +683,12 @@ final class StatusController: NSObject, NSMenuDelegate {
                 // (with manual-only refresh, quietly presenting old bars as current would lie).
                 if let note = holdNote ?? usage.lastError {
                     let suffix = usage.dataAgeText.map { " · data \($0)" } ?? ""
-                    menu.addItem(usageNoteRow(note + suffix, width: width))
+                    addUsageNote(note + suffix, width: width, to: menu)
                 } else if let age = usage.dataAgeText {
-                    menu.addItem(usageNoteRow("Data \(age) — press ⟳", width: width))
+                    addUsageNote("Data \(age) — press ⟳", width: width, to: menu)
                 }
             } else {
-                menu.addItem(usageNoteRow(holdNote ?? usage.lastError ?? "No data yet — press ⟳", width: width))
+                addUsageNote(holdNote ?? usage.lastError ?? "No data yet — press ⟳", width: width, to: menu)
             }
             menu.addItem(.separator())
         }
@@ -685,6 +708,9 @@ final class StatusController: NSObject, NSMenuDelegate {
             UserDefaults.standard.set(on, forKey: "showUsage")
             // No priming fetch: the ⟳ button is the ONLY request path, by explicit design. With
             // an empty cache the section says "No data yet — press ⟳" until the user does.
+        })
+        menu.addItem(toggleRow(title: "Alert at 90%", isOn: UserDefaults.standard.object(forKey: "alertHighUsage") as? Bool ?? true) { on in
+            UserDefaults.standard.set(on, forKey: "alertHighUsage")
         })
         menu.addItem(toggleRow(title: "Show timer", isOn: showTimer) { [weak self] on in
             self?.showTimer = on
@@ -722,6 +748,9 @@ final class StatusController: NSObject, NSMenuDelegate {
         menu.addItem(colorParent)
 
         menu.addItem(.separator())
+        let logItem = NSMenuItem(title: "Open usage log", action: #selector(openUsageLog), keyEquivalent: "")
+        logItem.target = self
+        menu.addItem(logItem)
         menu.addItem(NSMenuItem(title: "Version \(currentVersion)", action: nil, keyEquivalent: ""))
         if let latest = UserDefaults.standard.string(forKey: "latestVersion"), versionIsNewer(latest, than: currentVersion) {
             let up = NSMenuItem(title: "Update available", action: #selector(openLatestRelease), keyEquivalent: "")
@@ -960,6 +989,11 @@ final class StatusController: NSObject, NSMenuDelegate {
     // the hook's relaunch; ANY subsequent launch (login item at boot, Spotlight, Finder) clears it,
     // because each of those means someone wants the icon back.
     var quitMarkerPath: String { (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/user-quit") }
+
+    @objc func openUsageLog() {
+        if !FileManager.default.fileExists(atPath: UsageLog.path) { UsageLog.log("log opened from menu") }
+        NSWorkspace.shared.open(URL(fileURLWithPath: UsageLog.path))
+    }
 
     @objc func quit() {
         FileManager.default.createFile(atPath: quitMarkerPath, contents: nil)
@@ -1281,10 +1315,44 @@ final class StatusController: NSObject, NSMenuDelegate {
     // last one. Animated states are never skipped: animStep drives their frames and clock.
     var lastRenderKey: String?
 
+    // Usage warning badge: a small red dot on the menu bar icon while any cached limit is ≥90%.
+    // Reads only the cache — the badge never triggers a request; it updates when a fetch lands
+    // (onUpdate forces a re-render) and clears the same way after the limit resets and a fresh
+    // fetch shows it back under threshold.
+    var usageBadgeOn: Bool { showUsage && (usage.worstPercent ?? 0) >= 90 }
+
+    func badged(_ img: NSImage) -> NSImage {
+        guard usageBadgeOn else { return img }
+        var base = img
+        if img.isTemplate {
+            // Compositing a red dot forces a non-template image, which would lose the adaptive
+            // black/white of System mode — so resolve the tint ourselves from the bar's appearance.
+            let dark = statusItem.button?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let c: NSColor = dark ? .white : .black
+            let src = img
+            base = NSImage(size: img.size, flipped: false) { rect in
+                c.setFill(); rect.fill()
+                src.draw(in: rect, from: .zero, operation: .destinationIn, fraction: 1)
+                return true
+            }
+        }
+        let s = base.size
+        let composed = base
+        let out = NSImage(size: s, flipped: false) { rect in
+            composed.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+            let d: CGFloat = 7
+            NSColor.systemRed.setFill()
+            NSBezierPath(ovalIn: NSRect(x: rect.maxX - d, y: 0, width: d, height: d)).fill()
+            return true
+        }
+        out.isTemplate = false
+        return out
+    }
+
     func render(label: String, color: NSColor?, animate: Bool, startedAt: Double, dot: Bool = false) {
         guard let button = statusItem.button else { return }
         if !animate {
-            let key = "\(label)|\(dot)|\(Self.colorKey(color))"
+            let key = "\(label)|\(dot)|\(Self.colorKey(color))|\(usageBadgeOn)"
             if key == lastRenderKey, button.image != nil { return }
             lastRenderKey = key
         } else {
@@ -1304,10 +1372,10 @@ final class StatusController: NSObject, NSMenuDelegate {
         } else {
             animTimer?.invalidate(); animTimer = nil
             frameIdx = 0
-            button.image = dot ? dotIcon(color: color) : restingIcon(color: color)
+            button.image = badged(dot ? dotIcon(color: color) : restingIcon(color: color))
         }
         applyTitle()
-        if button.image == nil { button.image = dot ? dotIcon(color: color) : restingIcon(color: color) }
+        if button.image == nil { button.image = badged(dot ? dotIcon(color: color) : restingIcon(color: color)) }
     }
 
     // Stable string for an optional NSColor, so the redraw guard can compare colors across ticks
@@ -1319,7 +1387,7 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     func animStep() {
         frameIdx = (frameIdx + 1) % frameCount
-        statusItem.button?.image = iconImage(color: activeColor, frame: frameIdx)
+        statusItem.button?.image = badged(iconImage(color: activeColor, frame: frameIdx))
         applyTitle() // refresh the elapsed clock
     }
 
