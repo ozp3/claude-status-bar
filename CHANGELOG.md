@@ -3,6 +3,22 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.4] - 2026-07-19
+
+### Fixed
+- **Expired tokens are never sent.** Stored credentials carry an `expiresAt`; both sources (file
+  and Keychain) are now expiry-checked, and when everything on disk is expired the app fires no
+  request at all — it shows "Token expired — start a Claude Code session to refresh it" over the
+  cached bars and recovers automatically when Claude Code stores a fresh token. Firing with a dead
+  token wasn't just useless: the resulting 401 fed an auth-failure throttle that answered the very
+  next request with a 60-minute 429 (the log has the receipts: 401 at 14:16:04, 60m penalty for
+  the single request at 14:16:25).
+- **A token that 401s is never retried** (revoked before its expiresAt, clock skew): the failing
+  token's tail is remembered — across relaunches — and requests stay suppressed until a different
+  token appears. A successful fetch clears the gate.
+- Expired-token state no longer masquerades as "Not signed in", and no longer wipes the cached
+  usage snapshot.
+
 ## [0.4.3] - 2026-07-19
 
 ### Added

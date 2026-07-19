@@ -87,6 +87,10 @@ final class UsageMonitor {
         return r > 0 ? r : nil
     }
 
+    // Tail (last 8 chars) of a token that answered 401 — never the whole token, and only ever of
+    // an already-dead one. Persisted so a relaunch doesn't blindly retry the same dead token.
+    private var badTokenTail: String? = UserDefaults.standard.string(forKey: "usageBadTokenTail")
+
     // Called on the main thread whenever a fetch lands, so an open menu can redraw in place.
     var onUpdate: (() -> Void)?
 
@@ -154,8 +158,22 @@ final class UsageMonitor {
             return
         }
         // Re-read the token on every fetch instead of caching it: Claude Code rotates the OAuth
-        // token roughly hourly and rewrites the credentials file, so a cached copy goes 401 stale.
-        guard let token = Self.loadToken() else {
+        // token and may rewrite its stored credentials at any time.
+        let token: String
+        switch Self.loadToken() {
+        case .valid(let t):
+            token = t
+        case .expired:
+            // Every stored token is past its expiresAt. Do NOT fire: the 401 would feed the
+            // auth-failure throttle (one 401 earned the next request a 60-minute 429). Keep the
+            // cache — the account is still signed in, credentials just haven't rotated yet.
+            // lastFetch is left alone so the next menu open re-checks immediately; recovery is
+            // automatic the moment Claude Code writes a fresh token.
+            UsageLog.log("\(trigger): skip (stored tokens expired; waiting for Claude Code to rotate)")
+            lastError = "Token expired — start a Claude Code session to refresh it"
+            onUpdate?()
+            return
+        case .missing:
             UsageLog.log("\(trigger): no token (not signed in)")
             limits = []
             dataAt = 0
@@ -165,6 +183,14 @@ final class UsageMonitor {
             // account would resurrect the previous account's numbers.
             UserDefaults.standard.removeObject(forKey: "usageCache")
             UserDefaults.standard.removeObject(forKey: "usageCacheAt")
+            onUpdate?()
+            return
+        }
+        // Belt-and-braces for tokens that die BEFORE their expiresAt (revocation, clock skew):
+        // after a 401, never retry the exact token that failed — wait for a different one.
+        if let bad = badTokenTail, token.hasSuffix(bad) {
+            UsageLog.log("\(trigger): skip (token unchanged since last 401)")
+            lastError = "Token expired — start a Claude Code session to refresh it"
             onUpdate?()
             return
         }
@@ -192,9 +218,9 @@ final class UsageMonitor {
                 // counts down and vanishes on its own instead of lingering frozen.
                 holdFor = Double(http?.value(forHTTPHeaderField: "Retry-After") ?? "") ?? 60
             } else if code == 401 || code == 403 {
-                // Expired/rotated token — the next poll re-reads the file, which Claude Code
-                // will have refreshed by then, so this is transient rather than fatal.
-                failure = "Token expired — reopen Claude Code"
+                // The token died before its expiresAt (revoked/rotated server-side). Recover when
+                // Claude Code stores a fresh one; the badTokenTail gate stops repeats meanwhile.
+                failure = "Token expired — start a Claude Code session to refresh it"
             } else if code != 200 {
                 failure = "Usage unavailable (HTTP \(code))"
             } else if let data = data {
@@ -218,11 +244,17 @@ final class UsageMonitor {
                     self.retryAfter = self.lastFetch + holdFor
                     UserDefaults.standard.set(self.retryAfter, forKey: "usageRetryUntil")
                 }
+                if code == 401 || code == 403 {
+                    self.badTokenTail = String(token.suffix(8))
+                    UserDefaults.standard.set(self.badTokenTail, forKey: "usageBadTokenTail")
+                }
                 if let parsed = parsed {
                     self.limits = parsed
                     self.lastError = nil
                     self.dataAt = self.lastFetch
+                    self.badTokenTail = nil
                     UserDefaults.standard.removeObject(forKey: "usageRetryUntil")
+                    UserDefaults.standard.removeObject(forKey: "usageBadTokenTail")
                     if let enc = try? Self.cacheEncoder.encode(parsed) {
                         UserDefaults.standard.set(enc, forKey: "usageCache")
                         UserDefaults.standard.set(self.dataAt, forKey: "usageCacheAt")
@@ -303,22 +335,39 @@ final class UsageMonitor {
 
     // MARK: token
 
-    // Same resolution order Claude Code itself uses, cheapest first.
-    static func loadToken() -> String? {
-        if let t = ProcessInfo.processInfo.environment["CLAUDE_CODE_OAUTH_TOKEN"], !t.isEmpty { return t }
-        if let t = tokenFromCredentialsFile() { return t }
-        return tokenFromKeychain()
+    // Expired and absent are DIFFERENT states: absent means signed out (drop the cache), expired
+    // means Claude Code just hasn't rotated its stored credentials yet (keep everything, fire no
+    // request, recover the moment a fresh token appears).
+    enum TokenState {
+        case valid(String)
+        case expired
+        case missing
     }
 
-    private static func tokenFromCredentialsFile() -> String? {
-        let path = NSHomeDirectory() + "/.claude/.credentials.json"
-        guard let data = FileManager.default.contents(atPath: path) else { return nil }
-        return token(fromCredentialsJSON: data)
+    // Same resolution order Claude Code itself uses, cheapest first — but expiry-checked. Firing
+    // a request with an expired token is worse than useless: the 401 feeds an auth-failure
+    // throttle that answered our very next request with a 60-minute 429 (see usage.log).
+    static func loadToken() -> TokenState {
+        if let t = ProcessInfo.processInfo.environment["CLAUDE_CODE_OAUTH_TOKEN"], !t.isEmpty { return .valid(t) }
+        var sawExpired = false
+        for data in [credentialsFileData(), keychainData()] {
+            guard let data = data else { continue }
+            switch token(fromCredentialsJSON: data) {
+            case .valid(let t): return .valid(t)
+            case .expired: sawExpired = true
+            case .missing: break
+            }
+        }
+        return sawExpired ? .expired : .missing
+    }
+
+    private static func credentialsFileData() -> Data? {
+        FileManager.default.contents(atPath: NSHomeDirectory() + "/.claude/.credentials.json")
     }
 
     // Claude Code stores the same JSON blob as a generic keychain item on macOS when the
     // credentials file isn't used.
-    private static func tokenFromKeychain() -> String? {
+    private static func keychainData() -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "Claude Code-credentials",
@@ -326,16 +375,21 @@ final class UsageMonitor {
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var out: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess,
-              let data = out as? Data else { return nil }
-        return token(fromCredentialsJSON: data)
+        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess else { return nil }
+        return out as? Data
     }
 
-    private static func token(fromCredentialsJSON data: Data) -> String? {
+    // Internal (not private) so the expiry logic is testable with synthetic JSON.
+    static func token(fromCredentialsJSON data: Data) -> TokenState {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let oauth = obj["claudeAiOauth"] as? [String: Any],
-              let tok = oauth["accessToken"] as? String, !tok.isEmpty else { return nil }
-        return tok
+              let tok = oauth["accessToken"] as? String, !tok.isEmpty else { return .missing }
+        if let exp = (oauth["expiresAt"] as? NSNumber)?.doubleValue {
+            // Observed in milliseconds (1.78e12); tolerate seconds (1.78e9) in case that changes.
+            let expSecs = exp > 1e11 ? exp / 1000 : exp
+            if expSecs < Date().timeIntervalSince1970 { return .expired }
+        }
+        return .valid(tok)
     }
 }
 
