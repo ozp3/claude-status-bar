@@ -28,7 +28,7 @@ A tiny macOS menu bar app that shows **Claude Code's live status**: an animated 
 
 **Usage** *(this fork)* — the dropdown also lists your plan's rate-limit utilization: the 5-hour session window, the weekly cap, and any model-scoped weekly caps, each with a bar, a percentage, and when it resets. The colour turns amber past 75% and red past 90%. The menu bar icon itself is unchanged, so this costs no space up top.
 
-Fetched from Anthropic's `/api/oauth/usage` — the same endpoint the Claude UI reads — once at launch and thereafter only when you press the ⟳ button in the Usage header (30s cooldown). Opening the menu alone fires nothing, and there is no background timer ([privacy details](PRIVACY.md)). Stale numbers are labelled with their age.
+Fetched from Anthropic's `/api/oauth/usage` — the same endpoint the Claude UI reads — only when you press the ⟳ button in the Usage header (30s cooldown). Nothing else fires a request: not launch, not opening the menu, no background timer ([privacy details](PRIVACY.md)). Between presses the bars show the last snapshot, labelled with its age.
 
 Everything is controlled from the menu:
 
@@ -92,7 +92,7 @@ Download the latest DMG and drag it into Applications (choose **Replace**). That
 
 The app is stateless. Claude Code fires hooks as it works; the app polls those updates and aggregates them across every live session into a single icon, a permission dot if one needs you, animating if any session is working, resting when all are idle. By default it stays in the menu bar permanently (see **Always show**); toggled off, it launches itself when Claude Code opens and quits when nothing's running.
 
-The installer merges its hooks into `~/.claude/settings.json` (backing it up first). Its network calls are a once-a-day GitHub release check and, for the usage section, a read of Anthropic's usage endpoint at launch and on the ⟳ button ([details](PRIVACY.md)).
+The installer merges its hooks into `~/.claude/settings.json` (backing it up first). Its network calls are a once-a-day GitHub release check and, for the usage section, a read of Anthropic's usage endpoint on the ⟳ button only ([details](PRIVACY.md)).
 
 ## Troubleshooting
 

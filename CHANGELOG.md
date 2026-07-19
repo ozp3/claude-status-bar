@@ -3,6 +3,14 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.7] - 2026-07-19
+
+### Changed
+- **The ⟳ button is now the ONLY usage request path.** The once-per-launch warm fetch and the
+  "Show usage" toggle-on fetch are gone too: nothing contacts the usage endpoint until the user
+  presses refresh. With a truly empty cache (first run, or right after signing out) the first
+  press answers "updated — reopen", since the menu can't grow rows while open.
+
 ## [0.4.6] - 2026-07-19
 
 ### Added

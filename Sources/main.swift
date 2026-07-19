@@ -400,15 +400,12 @@ final class StatusController: NSObject, NSMenuDelegate {
         syncLoginItem()   // re-assert on every launch; the user may have removed it in System Settings
     }
 
-    // Usage is fetched ONLY when the user asks: the ⟳ button in the dropdown's Usage header
-    // (30s cooldown). Opening the menu fires nothing — it may be a settings visit — and there is
-    // no background poll. The endpoint answers in ~300ms (measured), well inside a menu's
-    // open time, so a ⟳ press restyles the bars in place before the menu closes.
-    //
-    // The one exception is this launch fetch. NSMenu can't add rows mid-tracking, so an open that
-    // starts with an empty cache could only show a note until reopened — the fetch lands but has
-    // nowhere to go. Priming once at launch means the first open already has rows to restyle
-    // in place.
+    // Usage is fetched ONLY when the user presses the ⟳ button in the dropdown's Usage header
+    // (30s cooldown). Nothing else fires a request: not launch, not menu open, not the toggle,
+    // no background poll. The bars between presses come from the persisted snapshot, labelled
+    // with their age. The cost of having no launch warm-up is confined to a truly empty cache
+    // (first run, or right after signing out): the first ⟳ press can't add rows mid-tracking
+    // (NSMenu limitation), so its verdict says "updated — reopen" instead of "updated".
     func setUpUsage() {
         usage.onUpdate = { [weak self] in
             guard let self = self else { return }
@@ -416,7 +413,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             // Close the button's feedback loop: spinner off, one short word about what happened.
             let status: String
             if self.usage.lastError == nil && self.usage.hasData {
-                status = "updated"
+                status = self.usageRowViews.count == self.usage.limits.count ? "updated" : "updated — reopen"
             } else if let rem = self.usage.retryRemaining {
                 status = "rate limited · \(self.retryText(rem))"
             } else if self.usage.lastError?.hasPrefix("Token expired") == true {
@@ -428,8 +425,6 @@ final class StatusController: NSObject, NSMenuDelegate {
             }
             self.usageHeader?.endSpin(status: status)
         }
-        guard showUsage else { return }
-        usage.refresh(trigger: "launch")
     }
 
     // Mirrors refreshOpenMenuRows: the row SET can't change while the menu tracks, so a fetch
@@ -688,9 +683,8 @@ final class StatusController: NSObject, NSMenuDelegate {
             guard let self = self else { return }
             self.showUsage = on
             UserDefaults.standard.set(on, forKey: "showUsage")
-            // Toggling on mid-session has the same empty-cache problem as launch, so prime it here
-            // too — the section fills on the next open rather than sitting at "Loading…".
-            if on, !self.usage.hasData { self.usage.refresh(trigger: "toggle") }
+            // No priming fetch: the ⟳ button is the ONLY request path, by explicit design. With
+            // an empty cache the section says "No data yet — press ⟳" until the user does.
         })
         menu.addItem(toggleRow(title: "Show timer", isOn: showTimer) { [weak self] on in
             self?.showTimer = on
