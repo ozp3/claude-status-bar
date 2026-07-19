@@ -3,6 +3,14 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.6] - 2026-07-19
+
+### Added
+- **Refresh button feedback.** Pressing ⟳ swaps it for the native spinner while the request runs,
+  then shows a short verdict ("updated", "rate limited · 24m", "token expired"). A press inside
+  the 30s cooldown answers "try again in 12s" instead of silently doing nothing; a press during
+  a 429 hold answers with the remaining hold time. Every suppressed press is also logged.
+
 ## [0.4.5] - 2026-07-19
 
 ### Changed

@@ -483,6 +483,9 @@ final class UsageRowView: NSView {
 final class UsageHeaderView: NSView {
     var onRefresh: (() -> Void)?
     private let button = NSButton()
+    private let spinner = NSProgressIndicator()
+    private let statusField = NSTextField(labelWithString: "")
+    private var statusGeneration = 0   // invalidates a pending auto-clear when new text arrives
 
     init(width: CGFloat) {
         super.init(frame: NSRect(x: 0, y: 0, width: width, height: 22))
@@ -495,6 +498,16 @@ final class UsageHeaderView: NSView {
         label.autoresizingMask = [.maxXMargin]
         addSubview(label)
 
+        // Transient feedback ("try again in 12s", "updated") pinned just left of the button —
+        // the note ROW can't be added mid-tracking, but text inside this view can change freely.
+        statusField.font = NSFont.systemFont(ofSize: NSFont.menuFont(ofSize: 0).pointSize - 3)
+        statusField.textColor = .secondaryLabelColor
+        statusField.alignment = .right
+        statusField.lineBreakMode = .byClipping
+        statusField.frame = NSRect(x: width - 14 - 20 - 6 - 170, y: 3, width: 170, height: 15)
+        statusField.autoresizingMask = [.minXMargin]
+        addSubview(statusField)
+
         button.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh usage")
         button.isBordered = false
         button.contentTintColor = .secondaryLabelColor
@@ -503,9 +516,44 @@ final class UsageHeaderView: NSView {
         button.frame = NSRect(x: width - 14 - 20, y: 1, width: 20, height: 20)
         button.autoresizingMask = [.minXMargin]
         addSubview(button)
+
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isIndeterminate = true
+        spinner.isDisplayedWhenStopped = false
+        spinner.frame = NSRect(x: width - 14 - 18, y: 3, width: 16, height: 16)
+        spinner.autoresizingMask = [.minXMargin]
+        addSubview(spinner)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @objc private func clicked() { onRefresh?() }
+
+    func showStatus(_ text: String) {
+        statusGeneration += 1
+        let gen = statusGeneration
+        statusField.stringValue = text
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            guard let self = self, self.statusGeneration == gen else { return }
+            self.statusField.stringValue = ""
+        }
+    }
+
+    // Press feedback: the arrow swaps for the native small spinner while the request runs.
+    // The safety timeout covers a completion that never fires (it shouldn't, but a stuck
+    // spinner reads as a hang, and the request itself times out at 10s).
+    func beginSpin() {
+        button.isHidden = true
+        spinner.startAnimation(nil)
+        statusGeneration += 1
+        statusField.stringValue = ""
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in self?.endSpin(status: nil) }
+    }
+
+    func endSpin(status: String?) {
+        spinner.stopAnimation(nil)
+        button.isHidden = false
+        if let status = status { showStatus(status) }
+    }
 }
 
 // One-line rows for the section's non-bar states (loading / error), styled like a disabled

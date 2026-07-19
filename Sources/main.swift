@@ -301,6 +301,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     var sessionMenuItems: [(item: NSMenuItem, id: String)] = []
     let usage = UsageMonitor()
     var usageRowViews: [UsageRowView] = []   // kept so a fetch landing mid-open can redraw in place
+    weak var usageHeader: UsageHeaderView?   // for spinner/status feedback; the menu item owns the view
     var activeBase = ""        // label without the elapsed clock
     var startedAt: Double = 0  // unix seconds the current turn began (0 = no clock)
     var activeColor: NSColor? = nil
@@ -410,8 +411,22 @@ final class StatusController: NSObject, NSMenuDelegate {
     // in place.
     func setUpUsage() {
         usage.onUpdate = { [weak self] in
-            guard let self = self, self.menuIsOpen else { return }
-            self.refreshOpenUsageRows()
+            guard let self = self else { return }
+            if self.menuIsOpen { self.refreshOpenUsageRows() }
+            // Close the button's feedback loop: spinner off, one short word about what happened.
+            let status: String
+            if self.usage.lastError == nil && self.usage.hasData {
+                status = "updated"
+            } else if let rem = self.usage.retryRemaining {
+                status = "rate limited · \(self.retryText(rem))"
+            } else if self.usage.lastError?.hasPrefix("Token expired") == true {
+                status = "token expired"
+            } else if self.usage.lastError?.hasPrefix("Not signed in") == true {
+                status = "not signed in"
+            } else {
+                status = "couldn't update"
+            }
+            self.usageHeader?.endSpin(status: status)
         }
         guard showUsage else { return }
         usage.refresh(trigger: "launch")
@@ -532,6 +547,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         menuIsOpen = false
         sessionMenuItems.removeAll()
         usageRowViews.removeAll()
+        usageHeader = nil
     }
 
     // The session SET only changes on reopen (NSMenu can't add/remove rows reliably mid-track).
@@ -610,7 +626,25 @@ final class StatusController: NSObject, NSMenuDelegate {
             // monitor). Rows show the cached numbers; a fetch landing mid-open restyles them in
             // place, and the age note below keeps stale data honest.
             let headerView = UsageHeaderView(width: width)
-            headerView.onRefresh = { [weak self] in self?.usage.refreshIfStale(maxAge: 30, trigger: "button") }
+            // The gates are checked HERE (not via refreshIfStale) so every press gets visible
+            // feedback: a suppressed press explains itself in the header instead of doing nothing.
+            headerView.onRefresh = { [weak self, weak headerView] in
+                guard let self = self, let hv = headerView else { return }
+                if let rem = self.usage.retryRemaining {
+                    hv.showStatus("rate limited · \(self.retryText(rem))")
+                    UsageLog.log("button: skip (429 hold, \(rem)s left)")
+                    return
+                }
+                let age = Date().timeIntervalSince1970 - self.usage.lastFetch
+                if age < 30 {
+                    hv.showStatus("try again in \(Int((30 - age).rounded()))s")
+                    UsageLog.log("button: skip (cooldown, \(Int(30 - age))s left)")
+                    return
+                }
+                hv.beginSpin()
+                self.usage.refresh(trigger: "button")
+            }
+            usageHeader = headerView
             let headerItem = NSMenuItem()
             headerItem.view = headerView
             menu.addItem(headerItem)
