@@ -1,5 +1,4 @@
 import Cocoa
-import UserNotifications
 
 // Plan-limit utilization, read from the same /api/oauth/usage endpoint the Claude UI uses.
 // Entirely separate from the hook-driven session state: hooks tell us what Claude is DOING,
@@ -378,9 +377,6 @@ final class UsageMonitor {
                     }
                     self.recordHistory(parsed, at: self.dataAt)
                     self.writeExport(parsed, at: self.dataAt)
-                    if UserDefaults.standard.object(forKey: "alertHighUsage") as? Bool ?? true {
-                        UsageAlerts.check(parsed)
-                    }
                 } else if holdFor > 0 {
                     self.lastError = nil   // 429: retryRemaining carries the note instead
                 } else {
@@ -634,46 +630,6 @@ final class UsageRowView: NSView {
     override func layout() {
         super.layout()
         layoutBar(percent: lastPercent)   // the track autoresizes with the menu; the fill doesn't
-    }
-}
-
-// High-usage alerts, piggybacked on user-triggered fetches — this file never initiates a
-// request. One notification per (limit, reset window): the same limit re-crossing 90% inside
-// the same window stays quiet, but fires again after its reset.
-enum UsageAlerts {
-    static let threshold = 90
-
-    // Pure dedupe logic, separated so it's testable without touching UNUserNotificationCenter.
-    static func dueAlerts(_ limits: [UsageLimit], seen: [String: Double]) -> (due: [UsageLimit], seen: [String: Double]) {
-        var seen = seen, due: [UsageLimit] = []
-        for l in limits where l.percent >= threshold {
-            let window = l.resetsAt?.timeIntervalSince1970 ?? 0
-            if seen[l.label] == window { continue }
-            seen[l.label] = window
-            due.append(l)
-        }
-        return (due, seen)
-    }
-
-    static func check(_ limits: [UsageLimit]) {
-        let d = UserDefaults.standard
-        let prior = (d.dictionary(forKey: "usageAlerted") as? [String: Double]) ?? [:]
-        let (due, seen) = dueAlerts(limits, seen: prior)
-        guard !due.isEmpty else { return }
-        d.set(seen, forKey: "usageAlerted")
-        let center = UNUserNotificationCenter.current()
-        center.requestAuthorization(options: [.alert, .sound]) { granted, err in
-            if let err = err { UsageLog.log("alert: authorization error — \(err.localizedDescription)"); return }
-            guard granted else { UsageLog.log("alert: notifications not authorized"); return }
-            for l in due {
-                let content = UNMutableNotificationContent()
-                content.title = "Claude usage at \(l.percent)%"
-                content.body = "\(l.label) — \(l.resetText)"
-                center.add(UNNotificationRequest(identifier: "usage-\(l.label)", content: content, trigger: nil)) { e in
-                    UsageLog.log("alert: \(l.label) \(l.percent)% \(e == nil ? "delivered" : "FAILED — \(e!.localizedDescription)")")
-                }
-            }
-        }
     }
 }
 

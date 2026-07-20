@@ -804,9 +804,6 @@ final class StatusController: NSObject, NSMenuDelegate {
             // No priming fetch: the ⟳ button is the ONLY request path, by explicit design. With
             // an empty cache the section says "No data yet — press ⟳" until the user does.
         })
-        menu.addItem(toggleRow(title: "Alert at 90%", isOn: UserDefaults.standard.object(forKey: "alertHighUsage") as? Bool ?? true) { on in
-            UserDefaults.standard.set(on, forKey: "alertHighUsage")
-        })
         menu.addItem(toggleRow(title: "Show timer", isOn: showTimer) { [weak self] on in
             self?.showTimer = on
             UserDefaults.standard.set(on, forKey: "showTimer")

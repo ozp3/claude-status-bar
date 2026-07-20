@@ -3,6 +3,15 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.2] - 2026-07-20
+
+### Removed
+- **The 90% notification.** With manual-only refresh it never made sense: the data arrives while
+  you're already looking at the menu, so the notification just repeated the screen — and macOS
+  refuses notification authorization for ad-hoc-signed apps anyway, so it only produced error
+  noise in the log. The menu bar red dot remains the high-usage signal; it persists passively,
+  which is what a warning actually needs to do.
+
 ## [0.5.1] - 2026-07-20
 
 ### Fixed
