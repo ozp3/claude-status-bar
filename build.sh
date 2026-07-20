@@ -158,19 +158,49 @@ OSA
   # (Removing .fseventsd from a mounted volume does not stick: the removal is itself an event
   # fseventsd logs, which recreates the folder.)
   cp "/Volumes/Claude Status Bar/.DS_Store" "$STAGE/.DS_Store" 2>/dev/null || true
+  # Volume icon: ship the app icon as the mounted image's disk icon. The icns goes into the
+  # stage folder, and the custom-icon Finder bit goes on the folder itself — hdiutil carries a
+  # -srcfolder's Finder info onto the volume root. SetFile is the classic tool; the xattr
+  # fallback writes the same 32-byte FinderInfo (flags at offset 8, kHasCustomIcon = 0x0400).
+  cp assets/AppIcon.icns "$STAGE/.VolumeIcon.icns"
   hdiutil detach "$device" >/dev/null || true
   rm -f build/rw.dmg
   # Scrub any hidden folder that may have accrued (.fseventsd, .Trashes, .Spotlight-V100, …),
   # keeping only the intentional .DS_Store that carries the window layout.
-  find "$STAGE" -maxdepth 1 -name ".*" ! -name ".DS_Store" -exec rm -rf {} + 2>/dev/null || true
-  hdiutil create -volname "Claude Status Bar" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+  find "$STAGE" -maxdepth 1 -name ".*" ! -name ".DS_Store" ! -name ".VolumeIcon.icns" -exec rm -rf {} + 2>/dev/null || true
+  # The custom-icon bit can only live on a real volume root — hdiutil does NOT carry a
+  # srcfolder's own Finder info there (verified empirically). So the final image takes one more
+  # round trip: folder → UDRW → set the bit on the mounted root → convert to compressed UDZO.
+  # The .fseventsd/no_log marker (created FIRST) stops fseventsd from journaling this brief
+  # writable mount, so nothing else accrues.
+  rm -f build/final-rw.dmg
+  hdiutil create -volname "Claude Status Bar" -srcfolder "$STAGE" -ov -format UDRW build/final-rw.dmg >/dev/null
+  # Take BOTH the device and the real mount point from attach's own output — hardcoding
+  # /Volumes/<name> breaks silently when a stale mount forces "<name> 1", and then every
+  # follow-up lands on a phantom folder on the boot volume instead of the image.
+  attach_out="$(hdiutil attach -nobrowse -noautoopen build/final-rw.dmg)"
+  fdev="$(echo "$attach_out" | grep -E '^/dev/' | head -1 | awk '{print $1}')"
+  FVOL="$(echo "$attach_out" | grep -o '/Volumes/.*' | tail -1)"
+  [[ -d "$FVOL" ]] || { echo "ERROR: final-rw did not mount"; exit 1; }
+  sleep 1
+  mkdir -p "$FVOL/.fseventsd" && touch "$FVOL/.fseventsd/no_log"
+  if command -v SetFile >/dev/null; then
+    SetFile -a C "$FVOL"
+  else
+    xattr -wx com.apple.FinderInfo "0000000000000000040000000000000000000000000000000000000000000000" "$FVOL"
+  fi
+  hdiutil detach "$fdev" >/dev/null
+  hdiutil convert build/final-rw.dmg -format UDZO -o "$DMG" -ov >/dev/null
+  rm -f build/final-rw.dmg
   rm -rf "$STAGE"
 
   # Guard: the shipped image must hold nothing but the app, the Applications symlink, and the
   # .DS_Store layout file. Mount read-only and abort before notarizing if any stray hidden entry
   # slipped in (the recurring .fseventsd/.Trashes problem).
   vdev="$(hdiutil attach -nobrowse -noautoopen -readonly "$DMG" | grep -E '^/dev/' | tail -1 | awk '{print $1}')"
-  stray="$(find "/Volumes/Claude Status Bar" -maxdepth 1 -name ".*" ! -name ".DS_Store" 2>/dev/null)"
+  stray="$(find "/Volumes/Claude Status Bar" -maxdepth 1 -name ".*" ! -name ".DS_Store" ! -name ".VolumeIcon.icns" ! -name ".fseventsd" 2>/dev/null)"
+  fsev="$(find "/Volumes/Claude Status Bar/.fseventsd" -type f ! -name "no_log" 2>/dev/null)"
+  stray="$stray$fsev"
   hdiutil detach "$vdev" >/dev/null 2>&1 || true
   if [[ -n "$stray" ]]; then
     echo "ERROR: DMG has stray hidden entries, aborting before notarize:"; echo "$stray"; exit 1
