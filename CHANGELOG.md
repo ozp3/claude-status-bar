@@ -3,6 +3,16 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.3] - 2026-07-20
+
+### Fixed
+- **The note under the bars now updates when a refresh lands.** Pressing ⟳ restyled the bars but
+  left the note saying "Data 3h old" over numbers that had just refreshed — it only corrected
+  itself when the menu was reopened. The note text is recomputed in place alongside the rows
+  (a text field can change mid-tracking even though a row can't be added or removed), and reads
+  "Updated just now" when there's nothing left to report. Both the menu build and the live update
+  now derive the text from one helper, so they can't drift apart again.
+
 ## [0.5.2] - 2026-07-20
 
 ### Removed

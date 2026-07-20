@@ -438,11 +438,32 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
     }
 
+    // What the note under the bars should say right now, or nil when the data speaks for itself.
+    // Shared by the menu build and the live mid-open update so the two can't drift.
+    func usageNoteText() -> String? {
+        if let rem = usage.retryRemaining {
+            let suffix = usage.dataAgeText.map { " · data \($0)" } ?? ""
+            return "Rate limited — retrying in \(retryText(rem))" + suffix
+        }
+        if let err = usage.lastError {
+            let suffix = usage.dataAgeText.map { " · data \($0)" } ?? ""
+            return err + suffix
+        }
+        if !usage.hasData { return "No data yet — press ⟳" }
+        return usage.dataAgeText.map { "Data \($0) — press ⟳" }
+    }
+
     // Mirrors refreshOpenMenuRows: the row SET can't change while the menu tracks, so a fetch
     // landing mid-open only restyles the existing rows (and is skipped if the count moved).
     func refreshOpenUsageRows() {
-        guard usageRowViews.count == usage.limits.count else { return }
-        for (view, limit) in zip(usageRowViews, usage.limits) { view.configure(limit, dayDelta: usage.dayDelta(for: limit.label, percent: limit.percent)) }
+        if usageRowViews.count == usage.limits.count {
+            for (view, limit) in zip(usageRowViews, usage.limits) { view.configure(limit, dayDelta: usage.dayDelta(for: limit.label, percent: limit.percent)) }
+        }
+        // The note is a plain text field, so unlike a row it CAN change mid-tracking — and it must:
+        // leaving "Data 3h old" under numbers that just refreshed is a lie the user can see.
+        // A row that has nothing left to report says so rather than emptying out, since the row
+        // itself can't be removed until the menu reopens.
+        usageNoteField?.stringValue = usageNoteText() ?? "Updated just now"
     }
 
     // Re-runs on first install AND on every version change, so upgrades pick up hook
@@ -753,9 +774,9 @@ final class StatusController: NSObject, NSMenuDelegate {
             let headerItem = NSMenuItem()
             headerItem.view = headerView
             menu.addItem(headerItem)
-            // The 429 note is computed here, at open time, so the countdown is live; when the
-            // deadline passes it simply stops appearing and the next ⟳ press retries.
-            let holdNote = usage.retryRemaining.map { "Rate limited — retrying in \(retryText($0))" }
+            // Computed at open time (so a 429 countdown is live) and recomputed in place by
+            // refreshOpenUsageRows when a fetch lands — same helper, so the two can't disagree.
+            let note = usageNoteText()
             if usage.hasData {
                 for limit in usage.limits {
                     let view = UsageRowView(width: width)
@@ -768,15 +789,12 @@ final class StatusController: NSObject, NSMenuDelegate {
                 // Stale or failing data is labelled rather than hidden: an error/hold note when a
                 // refresh is failing, otherwise a plain age note once the snapshot is >15 min old
                 // (with manual-only refresh, quietly presenting old bars as current would lie).
-                if let note = holdNote ?? usage.lastError {
-                    let suffix = usage.dataAgeText.map { " · data \($0)" } ?? ""
-                    addUsageNote(note + suffix, width: width, to: menu)
+                if let note = note {
+                    addUsageNote(note, width: width, to: menu)
                     addTokenFixItem(ifNeededTo: menu)
-                } else if let age = usage.dataAgeText {
-                    addUsageNote("Data \(age) — press ⟳", width: width, to: menu)
                 }
             } else {
-                addUsageNote(holdNote ?? usage.lastError ?? "No data yet — press ⟳", width: width, to: menu)
+                addUsageNote(note ?? "No data yet — press ⟳", width: width, to: menu)
                 addTokenFixItem(ifNeededTo: menu)
             }
             addSignInItem(to: menu)
