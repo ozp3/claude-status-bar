@@ -158,30 +158,45 @@ final class UsageMonitor {
 
     // MARK: history (local only)
 
-    // One line per successful fetch: {"ts": epoch, "p": {"Session": 36, ...}}. Feeds the ~24h
-    // delta chips in the rows. Sparse by design — fetches are manual — so deltas are best-effort.
+    // One line per successful fetch: {"ts": epoch, "p": {"Session": 36, …}, "r": {"Session": epoch}}.
+    // "r" is each limit's resets_at — the identity of the window that reading belongs to, which is
+    // what lets the session comparison find the PREVIOUS window (see windowDelta). Entries written
+    // before 0.5.4 have no "r" and simply don't participate in that comparison.
+    // Sparse by design — fetches are manual — so every delta is best-effort.
     static var historyPath = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/usage-history.jsonl")
-    private(set) var history: [(ts: Double, percents: [String: Int])] = []
+    typealias Snapshot = (ts: Double, percents: [String: Int], resets: [String: Double])
+    private(set) var history: [Snapshot] = []
 
-    static func loadHistory() -> [(ts: Double, percents: [String: Int])] {
+    static func loadHistory() -> [Snapshot] {
         guard let raw = try? String(contentsOfFile: historyPath, encoding: .utf8) else { return [] }
         return raw.split(separator: "\n").compactMap { line in
             guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   let ts = (obj["ts"] as? NSNumber)?.doubleValue,
                   let p = obj["p"] as? [String: NSNumber] else { return nil }
-            return (ts, p.mapValues { $0.intValue })
+            let r = (obj["r"] as? [String: NSNumber])?.mapValues { $0.doubleValue } ?? [:]
+            return (ts, p.mapValues { $0.intValue }, r)
         }
     }
 
+    private static func historyLine(_ s: Snapshot) -> [String: Any] {
+        var e: [String: Any] = ["ts": s.ts, "p": s.percents]
+        if !s.resets.isEmpty { e["r"] = s.resets }
+        return e
+    }
+
     private func recordHistory(_ parsed: [UsageLimit], at ts: Double) {
-        let entry: [String: Any] = ["ts": ts, "p": Dictionary(uniqueKeysWithValues: parsed.map { ($0.label, $0.percent) })]
-        history.append((ts, entry["p"] as! [String: Int]))
-        guard let data = try? JSONSerialization.data(withJSONObject: entry) else { return }
+        let snap: Snapshot = (
+            ts,
+            Dictionary(uniqueKeysWithValues: parsed.map { ($0.label, $0.percent) }),
+            Dictionary(uniqueKeysWithValues: parsed.compactMap { l in l.resetsAt.map { (l.label, $0.timeIntervalSince1970) } })
+        )
+        history.append(snap)
+        guard let data = try? JSONSerialization.data(withJSONObject: Self.historyLine(snap)) else { return }
         // Append; rewrite keeping the newest 500 once past 1000 so the file can't grow unbounded.
         if history.count > 1000 {
             history = Array(history.suffix(500))
             let lines = history.compactMap { h -> String? in
-                guard let d = try? JSONSerialization.data(withJSONObject: ["ts": h.ts, "p": h.percents]) else { return nil }
+                guard let d = try? JSONSerialization.data(withJSONObject: Self.historyLine(h)) else { return nil }
                 return String(data: d, encoding: .utf8)
             }
             try? (lines.joined(separator: "\n") + "\n").write(toFile: Self.historyPath, atomically: true, encoding: .utf8)
@@ -192,6 +207,39 @@ final class UsageMonitor {
         } else {
             try? (String(data: data, encoding: .utf8)! + "\n").write(toFile: Self.historyPath, atomically: true, encoding: .utf8)
         }
+    }
+
+    // The right comparison depends on how long the limit's window is, so pick per limit rather
+    // than applying one rule to all of them.
+    func delta(for limit: UsageLimit, now: Double = Date().timeIntervalSince1970) -> Int? {
+        // A 5-hour window resets ~5x a day, so "24h ago" lands in some unrelated window and the
+        // number is noise (it swings with where each reading happened to sit in its window).
+        // Compare against the last reading taken in the PREVIOUS window instead: "how far had I
+        // got by the end of the last stretch".
+        if limit.label.hasPrefix("Session") {
+            return windowDelta(for: limit)
+        }
+        // Weekly windows are 7 days long, so a reading from ~24h ago is inside the same window and
+        // the difference really is "what today cost me".
+        return dayDelta(for: limit.label, percent: limit.percent, now: now)
+    }
+
+    // Change vs the last reading recorded in the window before this one. Nil when that window was
+    // never observed (nothing to compare against — the app only sees what a ⟳ press captured).
+    func windowDelta(for limit: UsageLimit) -> Int? {
+        guard let currentReset = limit.resetsAt?.timeIntervalSince1970 else { return nil }
+        // Same-window readings share a resets_at; anything stamped earlier belongs to a past one.
+        // The 60s slack absorbs the sub-second jitter the API puts on the timestamp.
+        let earlier = history.filter { snap in
+            guard let r = snap.resets[limit.label], snap.percents[limit.label] != nil else { return false }
+            return r < currentReset - 60
+        }
+        guard let previousReset = earlier.compactMap({ $0.resets[limit.label] }).max() else { return nil }
+        let previousWindow = earlier.filter { abs(($0.resets[limit.label] ?? 0) - previousReset) < 60 }
+        guard let last = previousWindow.max(by: { $0.ts < $1.ts }),
+              let old = last.percents[limit.label] else { return nil }
+        let d = limit.percent - old
+        return d == 0 ? nil : d
     }
 
     // Change vs ~24h ago (nearest snapshot 20–28h back). Nil when history doesn't reach that far,

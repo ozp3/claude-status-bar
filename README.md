@@ -26,7 +26,7 @@ A tiny macOS menu bar app that shows **Claude Code's live status**: an animated 
 - **Awaiting permission** — a paused yellow dot, in both the CLI and the Desktop app.
 - **Idle / done** — rests on the Claude logo.
 
-**Usage** *(this fork)* — the dropdown also lists your plan's rate-limit utilization: the 5-hour session window, the weekly cap, and any model-scoped weekly caps, each with a bar, a percentage, when it resets, and (once a day of history exists) a small ▲/▼ chip showing the change vs ~24h ago. The colour turns amber past 75% and red past 90%. When any limit is at 90%+ the menu bar icon gains a small red dot; opening the menu shows which one.
+**Usage** *(this fork)* — the dropdown also lists your plan's rate-limit utilization: the 5-hour session window, the weekly cap, and any model-scoped weekly caps, each with a bar, a percentage, when it resets, and a small ▲/▼ chip showing the change: for the weekly caps that's versus ~24h ago, and for the 5-hour session it's versus where you'd got to by the end of the previous 5-hour window. The colour turns amber past 75% and red past 90%. When any limit is at 90%+ the menu bar icon gains a small red dot; opening the menu shows which one.
 
 Each successful refresh also writes `~/.claude/statusbar/usage-latest.json` — point your tmux/sketchybar/script at that file for zero extra requests.
 

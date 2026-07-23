@@ -3,6 +3,18 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.4] - 2026-07-20
+
+### Fixed
+- **The 5-hour session's ▲/▼ chip compared against the wrong thing.** Every limit was measured
+  against a reading from ~24h earlier, which is right for the weekly caps (same window, so the
+  difference is what the day cost) but meaningless for a window that resets ~5x a day: yesterday's
+  reading belongs to an unrelated window, so the number swung with where each reading happened to
+  fall in its own window. The session chip now compares against the last reading recorded in the
+  PREVIOUS 5-hour window, and shows nothing when that window was never observed. History entries
+  now carry each limit's `resets_at` so windows can be told apart; entries written before this
+  release lack it and simply don't participate.
+
 ## [0.5.3] - 2026-07-20
 
 ### Fixed

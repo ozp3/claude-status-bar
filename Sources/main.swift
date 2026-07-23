@@ -457,7 +457,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     // landing mid-open only restyles the existing rows (and is skipped if the count moved).
     func refreshOpenUsageRows() {
         if usageRowViews.count == usage.limits.count {
-            for (view, limit) in zip(usageRowViews, usage.limits) { view.configure(limit, dayDelta: usage.dayDelta(for: limit.label, percent: limit.percent)) }
+            for (view, limit) in zip(usageRowViews, usage.limits) { view.configure(limit, dayDelta: usage.delta(for: limit)) }
         }
         // The note is a plain text field, so unlike a row it CAN change mid-tracking — and it must:
         // leaving "Data 3h old" under numbers that just refreshed is a lie the user can see.
@@ -780,7 +780,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             if usage.hasData {
                 for limit in usage.limits {
                     let view = UsageRowView(width: width)
-                    view.configure(limit, dayDelta: usage.dayDelta(for: limit.label, percent: limit.percent))
+                    view.configure(limit, dayDelta: usage.delta(for: limit))
                     let it = NSMenuItem()
                     it.view = view
                     menu.addItem(it)
