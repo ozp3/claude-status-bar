@@ -123,7 +123,7 @@ enum UsageLog {
 
 final class UsageMonitor {
     private(set) var limits: [UsageLimit] = []
-    internal(set) var credit: UsageCredit?
+    var credit: UsageCredit?
     private(set) var lastError: String?
     private(set) var lastFetch: Double = 0
     private var inFlight = false
@@ -764,8 +764,19 @@ final class UsageRowView: NSView {
             text.append(NSAttributedString(string: " · \(d)", attributes: small))
         }
         labelField.attributedStringValue = text
-        percentField.stringValue = "\(c.usedText) \(c.limitText)"
+        let amountStr = "\(c.usedText) \(c.limitText)"
+        percentField.stringValue = amountStr
         percentField.textColor = c.percent >= 75 ? c.color : .secondaryLabelColor
+        // Credit amounts are wider than "53%": "$47.52 / $90.00" needs more space than the
+        // default 44px. Measure and size the right field to fit, up to half the row width,
+        // and pull the label back so the two can't overlap.
+        let mf = percentField.font ?? NSFont.monospacedSystemFont(ofSize: 11, weight: .medium)
+        let needed = ceil(amountStr.size(withAttributes: [.font: mf]).width) + 4
+        let w = bounds.width, gap: CGFloat = 8
+        let pw = min(needed, w / 2)
+        percentField.frame.size.width = pw
+        percentField.frame.origin.x = w - pad - pw
+        labelField.frame.size.width = percentField.frame.minX - gap - labelField.frame.minX
         barFill.layer?.backgroundColor = c.color.cgColor
         needsLayout = true
         layoutBar(percent: c.percent)
