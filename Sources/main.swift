@@ -301,6 +301,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     var sessionMenuItems: [(item: NSMenuItem, id: String)] = []
     let usage = UsageMonitor()
     var usageRowViews: [UsageRowView] = []   // kept so a fetch landing mid-open can redraw in place
+    weak var creditRow: UsageRowView?      // separate so creditDelta (string) isn't forced into int deltas
     weak var usageHeader: UsageHeaderView?   // for spinner/status feedback; the menu item owns the view
     weak var usageNoteField: NSTextField?    // so the local token re-check can heal the note in place
     var activeBase = ""        // label without the elapsed clock
@@ -458,6 +459,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     func refreshOpenUsageRows() {
         if usageRowViews.count == usage.limits.count {
             for (view, limit) in zip(usageRowViews, usage.limits) { view.configure(limit, dayDelta: usage.delta(for: limit)) }
+        if let c = usage.credit, let cr = creditRow { cr.configureCredit(c, delta: usage.creditDelta()) }
         }
         // The note is a plain text field, so unlike a row it CAN change mid-tracking — and it must:
         // leaving "Data 3h old" under numbers that just refreshed is a lie the user can see.
@@ -672,6 +674,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         menuIsOpen = false
         sessionMenuItems.removeAll()
         usageRowViews.removeAll()
+        creditRow = nil
         usageHeader = nil
         usageNoteField = nil
     }
@@ -699,6 +702,7 @@ final class StatusController: NSObject, NSMenuDelegate {
 
         sessionMenuItems.removeAll()
         usageRowViews.removeAll()
+        creditRow = nil
         let now = Date().timeIntervalSince1970
         // Gate ONLY the desktop app: opening/clicking a conversation there seeds an idle session without
         // real activity (the click-through clutter), so a desktop session stays out of the dropdown until
@@ -786,6 +790,14 @@ final class StatusController: NSObject, NSMenuDelegate {
                     menu.addItem(it)
                     usageRowViews.append(view)
                 }
+                if let c = usage.credit {
+                    let cr = UsageRowView(width: width)
+                    cr.configureCredit(c, delta: usage.creditDelta())
+                    creditRow = cr
+                    let it = NSMenuItem()
+                    it.view = cr
+                    menu.addItem(it)
+                } else { creditRow = nil }
                 // Stale or failing data is labelled rather than hidden: an error/hold note when a
                 // refresh is failing, otherwise a plain age note once the snapshot is >15 min old
                 // (with manual-only refresh, quietly presenting old bars as current would lie).

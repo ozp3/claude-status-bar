@@ -3,6 +3,15 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.5] - 2026-07-24
+
+### Added
+- **Credits row.** When your usage credits are enabled and have been used (the `spend` block in the
+  API response is active), a "Credits" row appears below the limits: dollar amounts on the right,
+  percentage bar, and a delta chip showing how much credit was consumed since the last check ("▲$5.52").
+  The row hides itself when credits are disabled or still at zero. Like everything else, it costs no
+  extra request — the spend data comes from the same `/api/oauth/usage` response the limits already fetch.
+
 ## [0.5.4] - 2026-07-20
 
 ### Fixed

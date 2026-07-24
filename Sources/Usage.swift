@@ -5,6 +5,59 @@ import Cocoa
 // this tells us how much of the plan is LEFT. The only account data that leaves the machine
 // is the OAuth token, sent to Anthropic (never to us) — see PRIVACY.md.
 
+// Usage credits / spend tracking, parsed from the `spend` block in the same API response.
+// Separate from rate-limit windows: credits are a dollar pool that covers you when plan limits
+// are exhausted. Only shown when enabled (has a non-zero limit and actual usage).
+struct UsageCredit {
+    let usedDollars: Double       // e.g. 47.52
+    let limitDollars: Double      // e.g. 90.00
+    let percent: Int
+    let canPurchase: Bool
+
+    var color: NSColor {
+        if percent >= 90 { return .systemRed }
+        if percent >= 75 { return .systemOrange }
+        return .systemGreen
+    }
+
+    // "$47.52 / $90.00"
+    static func dollarStr(_ v: Double) -> String {
+        let s = String(format: "%.2f", v)
+        return v >= 1 ? "$\(s)" : "\(Int(v * 100))¢"
+    }
+
+    var label: String { "Credits" }
+    var usedText: String { Self.dollarStr(usedDollars) }
+    var limitText: String { "/ \(Self.dollarStr(limitDollars))" }
+
+    // Percent as a whole number, clamped
+    static func pct(_ used: Double, _ limit: Double) -> Int { limit > 0 ? Int((used / limit * 100).rounded()) : 0 }
+
+    init?(from spend: [String: Any]) {
+        guard (spend["enabled"] as? Bool) == true else { return nil }
+        let used = spend["used"] as? [String: Any]
+        let limit = spend["limit"] as? [String: Any]
+        let cap = spend["cap"] as? [String: Any]
+        guard let ua = used?["amount_minor"] as? Int,
+              let ue = (used?["exponent"] as? Int) ?? (used?["decimal_places"] as? Int),
+              let limitSrc = limit ?? (cap?["credits"] as? [String: Any]) ?? (cap?["money"] as? [String: Any]),
+              let la = limitSrc["amount_minor"] as? Int,
+              let le = (limitSrc["exponent"] as? Int) ?? (limitSrc["decimal_places"] as? Int),
+              la > 0
+        else { return nil }
+        let ud = Double(ua) / pow(10, Double(ue))
+        let ld = Double(la) / pow(10, Double(le))
+        guard ud > 0 else { return nil }   // no spend yet → don't show the row
+        self.usedDollars = ud
+        self.limitDollars = ld
+        self.percent = Self.pct(ud, ld)
+        self.canPurchase = spend["can_purchase_credits"] as? Bool ?? false
+    }
+
+    // Doubles for history serialisation
+    var forHistory: [String: Double] { ["credits": usedDollars, "creditLimit": limitDollars] }
+}
+
 struct UsageLimit: Codable {
     let label: String
     let percent: Int
@@ -70,6 +123,7 @@ enum UsageLog {
 
 final class UsageMonitor {
     private(set) var limits: [UsageLimit] = []
+    internal(set) var credit: UsageCredit?
     private(set) var lastError: String?
     private(set) var lastFetch: Double = 0
     private var inFlight = false
@@ -164,7 +218,7 @@ final class UsageMonitor {
     // before 0.5.4 have no "r" and simply don't participate in that comparison.
     // Sparse by design — fetches are manual — so every delta is best-effort.
     static var historyPath = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/usage-history.jsonl")
-    typealias Snapshot = (ts: Double, percents: [String: Int], resets: [String: Double])
+    typealias Snapshot = (ts: Double, percents: [String: Int], resets: [String: Double], creditUsed: Double?)
     private(set) var history: [Snapshot] = []
 
     static func loadHistory() -> [Snapshot] {
@@ -174,13 +228,15 @@ final class UsageMonitor {
                   let ts = (obj["ts"] as? NSNumber)?.doubleValue,
                   let p = obj["p"] as? [String: NSNumber] else { return nil }
             let r = (obj["r"] as? [String: NSNumber])?.mapValues { $0.doubleValue } ?? [:]
-            return (ts, p.mapValues { $0.intValue }, r)
+            let c = (obj["c"] as? NSNumber)?.doubleValue
+            return (ts, p.mapValues { $0.intValue }, r, c)
         }
     }
 
     private static func historyLine(_ s: Snapshot) -> [String: Any] {
         var e: [String: Any] = ["ts": s.ts, "p": s.percents]
         if !s.resets.isEmpty { e["r"] = s.resets }
+        if let c = s.creditUsed { e["c"] = c }
         return e
     }
 
@@ -188,7 +244,8 @@ final class UsageMonitor {
         let snap: Snapshot = (
             ts,
             Dictionary(uniqueKeysWithValues: parsed.map { ($0.label, $0.percent) }),
-            Dictionary(uniqueKeysWithValues: parsed.compactMap { l in l.resetsAt.map { (l.label, $0.timeIntervalSince1970) } })
+            Dictionary(uniqueKeysWithValues: parsed.compactMap { l in l.resetsAt.map { (l.label, $0.timeIntervalSince1970) } }),
+            credit?.usedDollars
         )
         history.append(snap)
         guard let data = try? JSONSerialization.data(withJSONObject: Self.historyLine(snap)) else { return }
@@ -252,6 +309,19 @@ final class UsageMonitor {
         return d == 0 ? nil : d
     }
 
+    // Credits are cumulative within the month — the simplest delta is the right one. Every
+    // reading records its dollar amount in history; "how much since my last check" is exactly
+    // current minus the most recent previous entry. Returns nil when there is no prior reading
+    // or nothing changed (needs two check-ins to produce a chip).
+    func creditDelta() -> String? {
+        guard let cur = credit?.usedDollars else { return nil }
+        let prev = history.dropLast().last?.creditUsed
+        guard let p = prev, p > 0, cur != p else { return nil }
+        let d = cur - p
+        guard d != 0 else { return nil }
+        return "▲\(UsageCredit.dollarStr(abs(d)))"
+    }
+
     // MARK: export (local only)
 
     // Machine-readable snapshot for tmux/sketchybar/scripts — written on every successful fetch,
@@ -261,13 +331,18 @@ final class UsageMonitor {
     private static let isoOut: ISO8601DateFormatter = ISO8601DateFormatter()
 
     private func writeExport(_ parsed: [UsageLimit], at ts: Double) {
+        var rows: [[String: Any]] = parsed.map { l in
+            var row: [String: Any] = ["label": l.label, "percent": l.percent, "severity": l.severity]
+            if let r = l.resetsAt { row["resets_at"] = Self.isoOut.string(from: r) }
+            return row
+        }
+        if let c = credit {
+            rows.append(["label": "Credits", "percent": c.percent, "severity": "normal",
+                         "used": c.usedDollars, "limit": c.limitDollars, "export": "spend"])
+        }
         let obj: [String: Any] = [
             "fetched_at": Self.isoOut.string(from: Date(timeIntervalSince1970: ts)),
-            "limits": parsed.map { l -> [String: Any] in
-                var row: [String: Any] = ["label": l.label, "percent": l.percent, "severity": l.severity]
-                if let r = l.resetsAt { row["resets_at"] = Self.isoOut.string(from: r) }
-                return row
-            },
+            "limits": rows,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]) else { return }
         try? data.write(to: URL(fileURLWithPath: Self.exportPath), options: .atomic)
@@ -390,6 +465,14 @@ final class UsageMonitor {
             } else if let data = data {
                 parsed = Self.parse(data)
                 if parsed == nil { failure = "Unexpected usage response" }
+                // Credits live in the `spend` block (not in `limits`). Parse alongside.
+                if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let spend = obj["spend"] as? [String: Any] {
+                    self.credit = UsageCredit(from: spend)
+                    UsageLog.log("\(trigger): credit parsed = \(self.credit != nil ? "\(self.credit!.usedText)" : "nil (from spend enabled=\(spend["enabled"] ?? "?"))")")
+                } else {
+                    UsageLog.log("\(trigger): credit missing — spend key absent or parse failed")
+                }
             }
             let ms = Int(Date().timeIntervalSince(started) * 1000)
             if let err = err {
@@ -663,6 +746,29 @@ final class UsageRowView: NSView {
         barFill.layer?.backgroundColor = limit.color.cgColor
         needsLayout = true
         layoutBar(percent: limit.percent)
+    }
+
+    func configureCredit(_ c: UsageCredit, delta: String?) {
+        let font = NSFont.menuFont(ofSize: 0)
+        let para = NSMutableParagraphStyle()
+        para.lineBreakMode = .byTruncatingTail
+        para.allowsDefaultTighteningForTruncation = false
+        let text = NSMutableAttributedString(string: "Credits", attributes: [
+            .font: font, .paragraphStyle: para, .foregroundColor: NSColor.labelColor,
+        ])
+        if let d = delta {
+            let small: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: font.pointSize - 2),
+                .paragraphStyle: para, .foregroundColor: NSColor.secondaryLabelColor,
+            ]
+            text.append(NSAttributedString(string: " · \(d)", attributes: small))
+        }
+        labelField.attributedStringValue = text
+        percentField.stringValue = "\(c.usedText) \(c.limitText)"
+        percentField.textColor = c.percent >= 75 ? c.color : .secondaryLabelColor
+        barFill.layer?.backgroundColor = c.color.cgColor
+        needsLayout = true
+        layoutBar(percent: c.percent)
     }
 
     private var lastPercent = 0
