@@ -22,8 +22,10 @@ A tiny macOS menu bar app that shows **Claude Code's live status**: an animated 
 ## What it shows
 
 - **Thinking / working** — the icon animates, with a live `1m 1s` timer.
-- **Running a tool** — a short label (`Editing`, `Reading`, `Running command`, `Using tool`, …).
-- **Awaiting permission** — a paused yellow dot, in both the CLI and the Desktop app.
+- **Running a tool** — the same animation; what it says alongside is the **Label** setting below.
+- **Awaiting permission** — the logo stops animating and an amber dot appears beside it, breathing
+  slowly (~1.8s a cycle) so it catches the corner of your eye without nagging. Both the CLI and the
+  Desktop app. The still logo is the point: it is what tells "waiting on you" apart from "working".
 - **Idle / done** — rests on the Claude logo.
 
 **Usage** *(this fork)* — the dropdown also lists your plan's rate-limit utilization: the 5-hour session window, the weekly cap, and any model-scoped weekly caps, each with a bar, a percentage, when it resets, and a small ▲/▼ chip showing the change: for the weekly caps that's versus ~24h ago, and for the 5-hour session it's versus where you'd got to by the end of the previous 5-hour window. The colour turns amber past 75% and red past 90%. When any limit is at 90%+ the menu bar icon gains a small red dot; opening the menu shows which one.
@@ -47,13 +49,20 @@ Everything is controlled from the menu:
   - **Compact**: one SF Symbol standing in for the sentence — terminal for `Bash`, pencil for edits, magnifier for `Grep`/`Glob`, globe for the web tools, `…` while thinking (~22pt).
   - **Words**: the old behavior — a playful verb (`Manifesting…`, `Percolating…`) like Claude Code while thinking, and the tool label (`Running command`, `Editing`) while a tool runs.
 
-  `Awaiting permission` is deliberately outside this setting: it is the one state that asks something of you, so it keeps its words in every mode.
+  This setting spends **words only**. `Awaiting permission` keeps its own signal — the breathing amber
+  dot — in every mode, including **Off**: a request aimed at you is not the app narrating itself, so no
+  mode can switch it off. Its text (`Awaiting permission`) appears in **Words**; **Compact** and **Off**
+  show the dot alone, and deliberately look the same there.
 - **Animation style:**
   - **Claude Spark**, the web/chat "morph" spark
   - **Claude Code**, the terminal glyph spinner
   - **Crab Walking**, a pixel-art Clawd crab that scuttles while Claude works
 - **Icon color:** **Orange** or **System** (adaptive black/white). All three styles follow this setting: in System mode Crab Walking renders as a shaded monochrome silhouette that matches the menu bar.
-- **Version and update:** the menu shows your current version, with a one-click "Update available" when a newer release exists.
+- **Version and update:** the menu shows your current version with a ⟳ beside it — press it to check
+  for a new release on the spot; it answers in place (`up to date`, `0.5.8 available →`, `couldn't
+  check`) rather than closing the menu. A background check still runs at most once a day, and
+  anything it finds is already on offer the next time you open the dropdown. Clicking the row when a
+  newer release is on offer opens it.
 
 **Multi-session support.** When several Claude Code sessions run at once (multiple terminals, or a terminal plus the desktop app), the menu bar surfaces the highest-priority one: a session awaiting your permission is never hidden behind one that's thinking. The dropdown lists every live session. Precise per-tab focus is in progress: **[issue #19 →](https://github.com/m1ckc3s/claude-status-bar/issues/19)**.
 

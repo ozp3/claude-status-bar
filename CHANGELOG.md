@@ -3,6 +3,34 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.7] - 2026-08-26
+
+### Added
+- **Check for updates on demand.** The version row grew a ⟳, next to the one the usage section already
+  has. It bypasses the once-a-day gate (and the URL cache — a manual check answered from cache would
+  report "up to date" against a stale tag) and reports back **in place**: `up to date`,
+  `0.5.8 available →`, or `couldn't check`. The row is a custom view precisely so it can do that:
+  clicking a plain menu item dismisses the menu, and the answer would have landed on a closed
+  dropdown. This replaces the old pair — a dead `Version x.y.z` line plus an "Update available" item
+  that could only ever appear on the NEXT open, because the daily check's answer arrives after the
+  menu is built and NSMenu cannot grow while it tracks. When an update is on offer the whole row
+  opens it. Only one check runs at a time, however hard ⟳ is pressed.
+
+### Changed
+- **Awaiting permission keeps the logo.** It used to *replace* the logo with a yellow dot, so the icon
+  vanished for the one state that most wants recognising at a glance — and a missing icon reads as
+  "gone", not as the opposite of working. Now the logo stays put and stops animating, with the amber
+  dot beside it. The still logo is the signal: it is what separates "waiting on you" from "working".
+- **The permission dot breathes.** A slow cosine fade (~1.8s a cycle, down to 28% and back) — enough
+  movement to catch the corner of your eye, shallow and slow enough not to nag. A menu bar that blinks
+  at you gets muted, and this is the one signal that must still work the tenth time you see it. Only
+  the dot moves; the logo underneath it is composited once, not per frame.
+- **Awaiting permission now follows the Label setting for its TEXT.** `Awaiting permission` appears in
+  **Words**; **Compact** and **Off** show the breathing dot alone. The dot itself is outside the
+  setting in every mode — a request aimed at you is not the app narrating what it is doing, so "off"
+  has no business silencing it. Compact deliberately gets no glyph there: the dot already said it, and
+  at menu bar size its colour carries further in peripheral vision than any silhouette would.
+
 ## [0.5.6] - 2026-08-26
 
 ### Changed

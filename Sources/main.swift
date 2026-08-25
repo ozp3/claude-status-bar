@@ -247,6 +247,139 @@ final class SessionRowView: NSView {
     override func mouseDown(with event: NSEvent) { onClick?() }
 }
 
+// The version row doubles as the manual update check: "Version 0.5.6" on the left, ⟳ on the right,
+// the verdict in between. A custom view rather than a plain menu item because clicking a menu item
+// dismisses the menu — the answer would land on a dropdown that had already closed. Deliberately the
+// same shape as UsageHeaderView (one ⟳, one line of transient text) rather than new vocabulary.
+final class VersionRowView: NSView {
+    var onCheck: (() -> Void)?        // ⟳ pressed
+    var onOpenRelease: (() -> Void)?  // the row pressed while an update is on offer
+    private let versionField = NSTextField(labelWithString: "")
+    private let statusField = NSTextField(labelWithString: "")
+    private let button = NSButton()
+    private let spinner = NSProgressIndicator()
+    private let highlightView = NSVisualEffectView()  // system selection material, as in SessionRowView
+    private let tint: NSColor
+    private var actionable = false   // a newer release is known: the whole row opens it
+    private var hovered = false
+    private var statusGeneration = 0 // invalidates a pending auto-clear when new text arrives
+    private let rowH: CGFloat = 22
+
+    init(width: CGFloat, version: String, tint: NSColor) {
+        self.tint = tint
+        super.init(frame: NSRect(x: 0, y: 0, width: width, height: rowH))
+        autoresizingMask = [.width]
+
+        highlightView.material = .selection
+        highlightView.state = .active
+        highlightView.isEmphasized = true
+        highlightView.wantsLayer = true
+        highlightView.layer?.cornerRadius = 5
+        highlightView.isHidden = true
+        addSubview(highlightView)
+
+        versionField.font = .menuFont(ofSize: 0)
+        versionField.stringValue = "Version \(version)"
+        versionField.sizeToFit()
+        versionField.setFrameOrigin(NSPoint(x: 14, y: (rowH - versionField.frame.height) / 2))
+        versionField.autoresizingMask = [.maxXMargin]
+        addSubview(versionField)
+
+        // Verdict pinned just left of the button. Same trick as the usage header: a ROW can't be
+        // added or removed while the menu tracks, but text inside a view already on screen can change.
+        statusField.font = NSFont.systemFont(ofSize: NSFont.menuFont(ofSize: 0).pointSize - 3)
+        statusField.alignment = .right
+        statusField.lineBreakMode = .byClipping
+        statusField.frame = NSRect(x: width - 14 - 20 - 6 - 150, y: 3, width: 150, height: 15)
+        statusField.autoresizingMask = [.minXMargin]
+        addSubview(statusField)
+
+        button.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Check for updates")
+        button.isBordered = false
+        button.target = self
+        button.action = #selector(clicked)
+        button.toolTip = "Check for updates"
+        button.frame = NSRect(x: width - 14 - 20, y: 1, width: 20, height: 20)
+        button.autoresizingMask = [.minXMargin]
+        addSubview(button)
+
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isIndeterminate = true
+        spinner.isDisplayedWhenStopped = false
+        spinner.frame = NSRect(x: width - 14 - 18, y: 3, width: 16, height: 16)
+        spinner.autoresizingMask = [.minXMargin]
+        addSubview(spinner)
+
+        setHover(false)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    @objc private func clicked() { onCheck?() }
+
+    // Transient verdict ("up to date", "couldn't check") — it clears itself, so an answer can't
+    // outlive the check that produced it and get read as the current state on a later open.
+    func showStatus(_ text: String) {
+        statusGeneration += 1
+        let gen = statusGeneration
+        actionable = false
+        statusField.stringValue = text
+        setHover(hovered)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self = self, self.statusGeneration == gen else { return }
+            self.statusField.stringValue = ""
+        }
+    }
+
+    // Sticky, and turns the whole row into a button to the release page.
+    func showAvailable(_ version: String) {
+        statusGeneration += 1
+        actionable = true
+        statusField.stringValue = "\(version) available →"
+        setHover(hovered)
+    }
+
+    // The safety timeout covers a completion that never fires — a stuck spinner reads as a hang.
+    func beginSpin() {
+        button.isHidden = true
+        spinner.startAnimation(nil)
+        statusGeneration += 1
+        actionable = false
+        statusField.stringValue = ""
+        setHover(hovered)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in self?.endSpin(nil) }
+    }
+
+    func endSpin(_ status: String?) {
+        spinner.stopAnimation(nil)
+        button.isHidden = false
+        if let status = status { showStatus(status) }
+    }
+
+    // Custom views don't get the menu's automatic hover highlight, so draw it ourselves.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+    override func mouseEntered(with event: NSEvent) { setHover(true) }
+    override func mouseExited(with event: NSEvent) { setHover(false) }
+    // Highlight ONLY when there's something to click: a plain info row that lights up under the
+    // cursor promises an action it doesn't have.
+    private func setHover(_ h: Bool) {
+        hovered = h
+        let lit = h && actionable
+        highlightView.isHidden = !lit
+        versionField.textColor = lit ? .white : .labelColor
+        statusField.textColor = lit ? .white : (actionable ? tint : .secondaryLabelColor)
+        button.contentTintColor = lit ? .white : .secondaryLabelColor
+    }
+    override func layout() {
+        super.layout()
+        highlightView.frame = bounds.insetBy(dx: 5, dy: 0)
+    }
+    override func mouseDown(with event: NSEvent) { if actionable { onOpenRelease?() } }
+}
+
 final class StatusController: NSObject, NSMenuDelegate {
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let stateDir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/state.d")
@@ -255,6 +388,14 @@ final class StatusController: NSObject, NSMenuDelegate {
     var pollTimer: Timer?
     var animTimer: Timer?
     var frameIdx = 0
+    // The "awaiting permission" breath. Slow and shallow on purpose: a menu bar that blinks at you
+    // gets muted, and this is the one signal that must still work the tenth time you see it.
+    var pulseTimer: Timer?
+    var pulseBase: NSImage?      // the logo + usage badge, held still under the breathing dot
+    var pulsePhase: Double = 0   // 0…1 through one breath
+    let pulseFPS: Double = 15
+    let pulseCycle: Double = 1.8 // seconds per breath
+    let pulseDim: CGFloat = 0.28 // the dot's alpha at the bottom of the breath
 
     let launchedAt = Date()
     var notNeededSince: Date?
@@ -297,9 +438,10 @@ final class StatusController: NSObject, NSMenuDelegate {
     var sessions: [String: Session] = [:]  // id -> latest parsed per-session state
     var fileMTimes: [String: Date] = [:]   // "<id>.json" -> last-parsed mtime (re-parse only on change)
     var gitHeadCache: [String: String] = [:]  // cwd -> resolved HEAD path ("" = confirmed non-git)
-    var glyphCache: [String: NSImage] = [:]   // "<symbol>|<isDark>" -> the baked Compact-mode glyph
+    var glyphCache: [String: NSImage] = [:]   // "<symbol>|<isDark>|<tint>" -> the baked Compact-mode glyph
     var prevState: [String: String] = [:]  // id -> previous raw state per session
     var menuIsOpen = false                  // refresh the dropdown's per-session timers only while open
+    var updateCheckInFlight = false         // one manual update check at a time, however hard ⟳ is pressed
     var sessionMenuItems: [(item: NSMenuItem, id: String)] = []
     let usage = UsageMonitor()
     var usageRowViews: [UsageRowView] = []   // kept so a fetch landing mid-open can redraw in place
@@ -307,7 +449,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     weak var usageHeader: UsageHeaderView?   // for spinner/status feedback; the menu item owns the view
     weak var usageNoteField: NSTextField?    // so the local token re-check can heal the note in place
     var activeBase = ""        // label without the elapsed clock
-    var activeSymbol: String? = nil  // Compact mode: SF Symbol name drawn in place of the label
+    var activeSymbol: StatusGlyph? = nil  // Compact mode: the glyph drawn in place of the label
     var startedAt: Double = 0  // unix seconds the current turn began (0 = no clock)
     var activeColor: NSColor? = nil
 
@@ -333,10 +475,16 @@ final class StatusController: NSObject, NSMenuDelegate {
     //   words   — the old behavior: a rotating verb ("Manifesting…") or the hook's tool label ("Running command")
     //   compact — one SF Symbol standing in for that sentence (terminal, pencil, magnifier, …)
     //   off     — nothing at all (default): the animation already says "busy", the dropdown says what and where
-    // "Awaiting permission" is deliberately outside this setting — it is the one state that asks
-    // something of you, so it keeps its words in every mode.
+    // Awaiting permission only ever spends WORDS from this budget: its signal is the amber dot
+    // beside the logo, which no other state uses and which no mode can switch off. A request aimed
+    // at you isn't the app narrating what it's doing, so "off" has no business silencing it — which
+    // is why compact and off look identical there, and why compact gets no glyph (the dot already
+    // said it, and at menu bar size its color carries further than any silhouette would).
     enum LabelMode: String { case words, compact, off }
     var labelMode: LabelMode = .off
+    // A Compact-mode glyph: SF Symbol name plus an optional tint (nil = the menu bar's label color,
+    // which is what every state but "awaiting permission" wants).
+    struct StatusGlyph { let name: String; let tint: NSColor? }
     var sessionWord: [String: String] = [:] // id -> current thinking word; re-picked on each entry into "thinking"
     // Claude Code's SPINNER_VERBS, minus the hyphenated/tongue-twister ones. Longest kept is ~14 chars
     // ("Hullaballooing"/"Metamorphosing"); with the timer showing they can get wide in a crowded menu bar.
@@ -545,21 +693,36 @@ final class StatusController: NSObject, NSMenuDelegate {
     let releaseAPIURL = "https://api.github.com/repos/ozp3/claude-status-bar/releases/latest"
     let releasePageURL = "https://github.com/ozp3/claude-status-bar/releases/latest"
 
-    // Once/day: cache GitHub's latest release tag in UserDefaults. Nothing sent to us.
-    func checkForUpdate() {
+    // Cache GitHub's latest release tag in UserDefaults. Nothing about you is sent — it's a plain
+    // GET of a public endpoint. The automatic call is gated to once a day; `force` is the version
+    // row's ⟳, which has to answer every press, and reports back through `completion`
+    // (nil = the check failed) so the row can say so in place.
+    func checkForUpdate(force: Bool = false, completion: ((String?) -> Void)? = nil) {
         let d = UserDefaults.standard
         let now = Date().timeIntervalSince1970
-        if now - d.double(forKey: "lastUpdateCheck") < 86400 { return }
-        guard let url = URL(string: releaseAPIURL) else { return }
+        if !force, now - d.double(forKey: "lastUpdateCheck") < 86400 { return }
+        guard let url = URL(string: releaseAPIURL) else { completion?(nil); return }
         var req = URLRequest(url: url)
         req.setValue("ClaudeStatusBar", forHTTPHeaderField: "User-Agent") // GitHub API requires a UA
+        // A manual check answered from the URL cache would report "up to date" against a stale tag —
+        // and this is the one path where the user is explicitly asking us to go and look.
+        if force { req.cachePolicy = .reloadIgnoringLocalCacheData }
         URLSession.shared.dataTask(with: req) { data, _, _ in
-            guard let data = data,
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let tag = obj["tag_name"] as? String else { return }
-            let ver = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
-            UserDefaults.standard.set(ver, forKey: "latestVersion")
-            UserDefaults.standard.set(now, forKey: "lastUpdateCheck")
+            var ver: String?
+            if let data = data,
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let tag = obj["tag_name"] as? String {
+                ver = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+            }
+            // Hop to main: the cache is read from there on every menu open, and the completion
+            // drives UI. Only a successful check moves the clock, so a failure retries next open.
+            DispatchQueue.main.async {
+                if let ver = ver {
+                    d.set(ver, forKey: "latestVersion")
+                    d.set(now, forKey: "lastUpdateCheck")
+                }
+                completion?(ver)
+            }
         }.resume()
     }
 
@@ -897,12 +1060,35 @@ final class StatusController: NSObject, NSMenuDelegate {
         let logItem = NSMenuItem(title: "Open usage log", action: #selector(openUsageLog), keyEquivalent: "")
         logItem.target = self
         menu.addItem(logItem)
-        menu.addItem(NSMenuItem(title: "Version \(currentVersion)", action: nil, keyEquivalent: ""))
-        if let latest = UserDefaults.standard.string(forKey: "latestVersion"), versionIsNewer(latest, than: currentVersion) {
-            let up = NSMenuItem(title: "Update available", action: #selector(openLatestRelease), keyEquivalent: "")
-            up.target = self
-            menu.addItem(up)
+        // Version + manual update check in one row. It replaces the old pair (a dead "Version x.y.z"
+        // line, plus an "Update available" item that could only appear on the NEXT open, because the
+        // daily check's answer lands after the menu is already built and NSMenu can't grow while it
+        // tracks). Pressing ⟳ answers into this row instead, which is already on screen.
+        let vrow = VersionRowView(width: CGFloat(uiConfig()["boxWidth"] ?? 300),
+                                  version: currentVersion, tint: brand)
+        vrow.onCheck = { [weak self, weak vrow] in
+            guard let self = self, let vrow = vrow, !self.updateCheckInFlight else { return }
+            self.updateCheckInFlight = true
+            vrow.beginSpin()
+            self.checkForUpdate(force: true) { [weak self, weak vrow] latest in
+                guard let self = self else { return }
+                self.updateCheckInFlight = false
+                guard let vrow = vrow else { return }
+                vrow.endSpin(nil)
+                guard let latest = latest else { vrow.showStatus("couldn't check"); return }
+                if self.versionIsNewer(latest, than: self.currentVersion) { vrow.showAvailable(latest) }
+                else { vrow.showStatus("up to date") }
+            }
         }
+        vrow.onOpenRelease = { [weak self] in menu.cancelTracking(); self?.openLatestRelease() }
+        // Seed from the cached tag, so an update the daily check already found is on offer the
+        // moment the menu opens rather than only after you press ⟳.
+        if let latest = UserDefaults.standard.string(forKey: "latestVersion"), versionIsNewer(latest, than: currentVersion) {
+            vrow.showAvailable(latest)
+        }
+        let vitem = NSMenuItem()
+        vitem.view = vrow
+        menu.addItem(vitem)
         let q = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
         q.target = self
         menu.addItem(q)
@@ -1007,7 +1193,7 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     func statusText(_ s: Session, eff: String) -> String {
         switch eff {
-        case "permission":       return "Awaiting permission"
+        case "permission":       return labelMode == .words ? "Awaiting permission" : ""
         case "thinking", "tool": return workingLabel(s)
         default:                 return s.state == "done" ? "Done" : "Idle"
         }
@@ -1113,21 +1299,25 @@ final class StatusController: NSObject, NSMenuDelegate {
         return s.state == "tool" ? "Working…" : "Thinking…"
     }
 
-    // Compact mode's stand-in for the label. Keyed off the RAW tool name rather than the hook's
-    // prose ("Running command"), so rewording those strings can never silently break the mapping.
-    func workingSymbol(_ s: Session) -> String? {
+    // Compact mode's stand-in for the label. The tool cases key off the RAW tool name rather than
+    // the hook's prose ("Running command"), so rewording those strings can never silently break the
+    // mapping. Permission keeps the amber it wears everywhere else — the one state that wants you.
+    func statusSymbol(_ s: Session, eff: String) -> StatusGlyph? {
         guard labelMode == .compact else { return nil }
-        guard s.state == "tool" else { return "ellipsis" }
+        if eff == "permission" { return nil }   // the amber dot beside the logo already says it
+        guard eff == "tool" else { return StatusGlyph(name: "ellipsis", tint: nil) }
+        let name: String
         switch s.tool {
-        case "Bash":                                      return "terminal"
-        case "Edit", "Write", "MultiEdit", "NotebookEdit": return "pencil"
-        case "Read":                                      return "doc.text"
-        case "Grep", "Glob":                              return "magnifyingglass"
-        case "WebFetch", "WebSearch":                     return "globe"
-        case "Task":                                      return "arrow.triangle.branch"
-        case "TodoWrite":                                 return "checklist"
-        default:                                          return "wrench.and.screwdriver"
+        case "Bash":                                      name = "terminal"
+        case "Edit", "Write", "MultiEdit", "NotebookEdit": name = "pencil"
+        case "Read":                                      name = "doc.text"
+        case "Grep", "Glob":                              name = "magnifyingglass"
+        case "WebFetch", "WebSearch":                     name = "globe"
+        case "Task":                                      name = "arrow.triangle.branch"
+        case "TodoWrite":                                 name = "checklist"
+        default:                                          name = "wrench.and.screwdriver"
         }
+        return StatusGlyph(name: name, tint: nil)
     }
 
     // Re-pick a word each time a session ENTERS the thinking state (prompt, or a tool->thinking `post`),
@@ -1366,9 +1556,11 @@ final class StatusController: NSObject, NSMenuDelegate {
         guard let lead = lead else { renderResting(); return }
         switch lead.eff {
         case "permission":
-            render(label: statusText(lead, eff: lead.eff), color: amber, animate: false, startedAt: 0, dot: true)
+            render(label: statusText(lead, eff: lead.eff), symbol: statusSymbol(lead, eff: lead.eff),
+                   color: iconColor, animate: false, startedAt: 0, dot: true)
         case "thinking", "tool":
-            render(label: statusText(lead, eff: lead.eff), symbol: workingSymbol(lead), color: iconColor, animate: true, startedAt: lead.startedAt)
+            render(label: statusText(lead, eff: lead.eff), symbol: statusSymbol(lead, eff: lead.eff),
+                   color: iconColor, animate: true, startedAt: lead.startedAt)
         default:
             renderResting()
         }
@@ -1491,24 +1683,43 @@ final class StatusController: NSObject, NSMenuDelegate {
     // fetch shows it back under threshold.
     var usageBadgeOn: Bool { showUsage && (usage.worstPercent ?? 0) >= 90 }
 
+    // Resolve a template image against the menu bar's own light/dark. Compositing anything colored
+    // onto it forces a non-template result, which would otherwise lose System mode's adaptive
+    // black/white and go flat black on a dark bar.
+    func flattened(_ img: NSImage) -> NSImage {
+        guard img.isTemplate else { return img }
+        let dark = statusItem.button?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let c: NSColor = dark ? .white : .black
+        let src = img
+        return NSImage(size: img.size, flipped: false) { rect in
+            c.setFill(); rect.fill()
+            src.draw(in: rect, from: .zero, operation: .destinationIn, fraction: 1)
+            return true
+        }
+    }
+
+    // Awaiting permission: the amber dot sits BESIDE the logo, which stays put and stops animating.
+    // It used to replace the logo outright — so the icon vanished for the one state that most wants
+    // recognising at a glance, and "stopped" read as "gone" rather than as the opposite of working.
+    // Takes an already-badged logo, so the usage badge stays anchored to the logo's own corner
+    // instead of landing on top of the dot.
+    func withPermissionDot(_ logo: NSImage, alpha: CGFloat = 1) -> NSImage {
+        let base = flattened(logo)
+        let d: CGFloat = 7, gap: CGFloat = 3, dotColor = amber.withAlphaComponent(alpha)
+        let out = NSImage(size: NSSize(width: base.size.width + gap + d, height: base.size.height), flipped: false) { rect in
+            base.draw(in: NSRect(origin: .zero, size: base.size), from: .zero, operation: .sourceOver, fraction: 1)
+            dotColor.setFill()
+            NSBezierPath(ovalIn: NSRect(x: base.size.width + gap, y: (rect.height - d) / 2, width: d, height: d)).fill()
+            return true
+        }
+        out.isTemplate = false   // the amber dot keeps its color whatever the bar's appearance
+        return out
+    }
+
     func badged(_ img: NSImage) -> NSImage {
         guard usageBadgeOn else { return img }
-        var base = img
-        if img.isTemplate {
-            // Compositing a red dot forces a non-template image, which would lose the adaptive
-            // black/white of System mode — so resolve the tint ourselves from the bar's appearance.
-            let dark = statusItem.button?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            let c: NSColor = dark ? .white : .black
-            let src = img
-            base = NSImage(size: img.size, flipped: false) { rect in
-                c.setFill(); rect.fill()
-                src.draw(in: rect, from: .zero, operation: .destinationIn, fraction: 1)
-                return true
-            }
-        }
-        let s = base.size
-        let composed = base
-        let out = NSImage(size: s, flipped: false) { rect in
+        let composed = flattened(img)
+        let out = NSImage(size: composed.size, flipped: false) { rect in
             composed.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
             let d: CGFloat = 7
             NSColor.systemRed.setFill()
@@ -1519,10 +1730,10 @@ final class StatusController: NSObject, NSMenuDelegate {
         return out
     }
 
-    func render(label: String, symbol: String? = nil, color: NSColor?, animate: Bool, startedAt: Double, dot: Bool = false) {
+    func render(label: String, symbol: StatusGlyph? = nil, color: NSColor?, animate: Bool, startedAt: Double, dot: Bool = false) {
         guard let button = statusItem.button else { return }
         if !animate {
-            let key = "\(label)|\(symbol ?? "")|\(dot)|\(Self.colorKey(color))|\(usageBadgeOn)"
+            let key = "\(label)|\(symbol?.name ?? "")|\(Self.colorKey(symbol?.tint))|\(dot)|\(Self.colorKey(color))|\(usageBadgeOn)"
             if key == lastRenderKey, button.image != nil { return }
             lastRenderKey = key
         } else {
@@ -1543,10 +1754,40 @@ final class StatusController: NSObject, NSMenuDelegate {
         } else {
             animTimer?.invalidate(); animTimer = nil
             frameIdx = 0
-            button.image = badged(dot ? dotIcon(color: color) : restingIcon(color: color))
+            let base = badged(restingIcon(color: color))
+            pulseBase = dot ? base : nil
+            button.image = dot ? withPermissionDot(base, alpha: pulseAlpha) : base
+        }
+        // The amber dot breathes while permission is pending: enough movement to catch the corner of
+        // your eye, slow and shallow enough not to nag. Deliberately NOT the logo — a still logo is
+        // what separates "waiting on you" from "working", so only the dot moves.
+        if dot {
+            if pulseTimer == nil {
+                pulsePhase = 0   // start bright, so the state announces itself the instant it begins
+                let t = Timer(timeInterval: 1.0 / pulseFPS, repeats: true) { [weak self] _ in self?.pulseStep() }
+                RunLoop.main.add(t, forMode: .common)
+                pulseTimer = t
+            }
+        } else {
+            pulseTimer?.invalidate(); pulseTimer = nil
+            pulseBase = nil
         }
         applyTitle()
-        if button.image == nil { button.image = badged(dot ? dotIcon(color: color) : restingIcon(color: color)) }
+        if button.image == nil { button.image = badged(restingIcon(color: color)) }
+    }
+
+    // Only the dot is recomposited per frame; the logo underneath it is built once, in render().
+    func pulseStep() {
+        guard let base = pulseBase else { pulseTimer?.invalidate(); pulseTimer = nil; return }
+        pulsePhase += 1 / (pulseFPS * pulseCycle)
+        if pulsePhase >= 1 { pulsePhase -= 1 }
+        statusItem.button?.image = withPermissionDot(base, alpha: pulseAlpha)
+    }
+
+    // Cosine ease between full and dim — no hard edges, so it reads as breathing, not blinking.
+    var pulseAlpha: CGFloat {
+        let u = (1 + cos(2 * .pi * pulsePhase)) / 2   // 1 -> 0 -> 1 over one cycle
+        return pulseDim + (1 - pulseDim) * CGFloat(u)
     }
 
     // Stable string for an optional NSColor, so the redraw guard can compare colors across ticks
@@ -1600,16 +1841,16 @@ final class StatusController: NSObject, NSMenuDelegate {
     // Compact mode's glyph: an SF Symbol baked flat in the menu bar's label color. Baked rather than
     // left as a template because a text attachment ignores .foregroundColor — and the menu bar's
     // light/dark is its own, so the cache keys on it and a theme flip repaints on the next frame.
-    func statusGlyph(_ name: String) -> NSImage? {
+    func statusGlyph(_ glyph: StatusGlyph) -> NSImage? {
         let dark = (statusItem.button?.effectiveAppearance ?? NSApp.effectiveAppearance)
             .bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        let key = "\(name)|\(dark)"
+        let key = "\(glyph.name)|\(dark)|\(Self.colorKey(glyph.tint))"
         if let cached = glyphCache[key] { return cached }
         let pt = NSFont.monospacedDigitSystemFont(ofSize: 0, weight: .regular).pointSize
-        guard let sym = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+        guard let sym = NSImage(systemSymbolName: glyph.name, accessibilityDescription: nil)?
                 .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: pt, weight: .regular))
         else { return nil }
-        let fg = NSColor(white: dark ? 1 : 0, alpha: 0.9)   // labelColor's weight, resolved by hand
+        let fg = glyph.tint ?? NSColor(white: dark ? 1 : 0, alpha: 0.9)  // labelColor's weight, resolved by hand
         let out = NSImage(size: sym.size, flipped: false) { rect in
             sym.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
             fg.setFill()
@@ -1709,17 +1950,6 @@ final class StatusController: NSObject, NSMenuDelegate {
         let h: CGFloat = 18, w = (ph > 0 ? h * (pw / ph) : h)
         let img = NSImage(size: NSSize(width: w, height: h), flipped: false) { rect in
             src.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
-            return true
-        }
-        img.isTemplate = (color == nil)
-        return img
-    }
-
-    func dotIcon(color: NSColor?) -> NSImage {
-        let s: CGFloat = 18, d: CGFloat = 9
-        let img = NSImage(size: NSSize(width: s, height: s), flipped: false) { _ in
-            (color ?? .systemYellow).setFill()
-            NSBezierPath(ovalIn: NSRect(x: (s - d) / 2, y: (s - d) / 2, width: d, height: d)).fill()
             return true
         }
         img.isTemplate = (color == nil)
