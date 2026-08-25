@@ -1,4 +1,4 @@
-<a href="https://github.com/ozp3/claude-status-bar/releases/latest/download/ClaudeStatusBar.dmg"><img src="assets/download.png" alt="Download ClaudeStatusBar.dmg for macOS" width="220"></a>
+<a href="https://github.com/ozp3/claude-status-bar/releases/latest/download/ClaudeStatusBar.app.zip"><img src="assets/download.png" alt="Download Claude Status Bar for macOS" width="220"></a>
 <br>
 **Apple Silicon · ad-hoc signed** — see [Install](#install)
 
@@ -77,10 +77,11 @@ Everything is controlled from the menu:
 
 ## Install
 
-### DMG
+### Download
 
-1. Download the latest `ClaudeStatusBar.dmg` from [Releases](../../releases).
-2. Open it and drag **Claude Status Bar** into Applications.
+1. Download the latest `ClaudeStatusBar.app.zip` from [Releases](../../releases) — published
+   automatically by CI on every tagged version.
+2. Unzip it and drag **Claude Status Bar** into Applications.
 3. **Right-click the app → Open → Open.** Double-clicking will fail the first time (see below).
 4. On first launch it wires up the Claude Code hooks for you automatically.
 5. Start a new Claude Code session, the icon appears whenever Claude Code is running.
@@ -100,7 +101,19 @@ Everything is controlled from the menu:
 > [!IMPORTANT]
 > **Updated mid-session?** Sessions already open won't show up until they do something (send a prompt) or you start a new `claude` session.
 
-Download the latest DMG and drag it into Applications (choose **Replace**). That's it: it refreshes its own hooks the next time it starts up (on a version change it re-runs its installer automatically), so there's nothing to run by hand. Your next Claude Code session picks them up.
+**From the app.** Open the dropdown and press **⟳** next to the version. If there's a newer release,
+the row becomes `install 0.5.9 →` — click it and the app downloads that release's `.app.zip`,
+verifies it really is this app at that version, swaps itself, and relaunches. Nothing is installed
+without that click, and no Gatekeeper prompt appears: the quarantine flag is only set on things
+*you* download in a browser, not on what the app fetches for itself. It never installs silently.
+
+The check itself runs at most once a day in the background; ⟳ skips that gate (and the URL cache)
+and answers on the spot.
+
+**By hand.** Download the latest zip, unzip, and drag it into Applications (choose **Replace**).
+
+Either way it refreshes its own hooks the next time it starts up (on a version change it re-runs its
+installer automatically), so there's nothing to run by hand. Your next Claude Code session picks them up.
 
 ## Requirements
 

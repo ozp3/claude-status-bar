@@ -1,0 +1,56 @@
+name: Release
+
+# A tag push is the release. The job builds the app exactly the way build.sh does locally, archives
+# it with ditto, and attaches it to a GitHub Release — which is what the in-app updater installs.
+#
+# Free on this repo: Actions minutes are unlimited for public repositories on standard runners, and
+# release assets cost nothing. macos-14 is the standard Apple-silicon runner (the -xlarge classes
+# are the paid ones); it also matches build.sh's arm64-only target.
+#
+# Note on untrusted input: no `run:` step interpolates `${{ }}` at all. The tag reaches the shell as
+# a quoted environment variable, never spliced into the script text.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # A release whose asset reports a different version than its tag would make the in-app updater
+      # loop forever: it would install the "new" build, still read the old version, and offer it
+      # again on the next check. Fail loudly here instead.
+      - name: Check the tag matches build.sh
+        run: |
+          want="${TAG#v}"
+          built=$(grep -o '<key>CFBundleShortVersionString</key><string>[^<]*' build.sh | sed 's/.*<string>//')
+          echo "tag=$want  build.sh=$built"
+          if [ "$want" != "$built" ]; then
+            echo "::error::tag $want does not match build.sh's $built — bump one of them"
+            exit 1
+          fi
+
+      - name: Build
+        run: ./build.sh
+
+      # ditto, not zip: it preserves the bundle's symlinks and exec bits, and it is what the in-app
+      # updater calls to unpack the asset again.
+      - name: Archive the app
+        run: ditto -c -k --keepParent build/ClaudeStatusBar.app ClaudeStatusBar.app.zip
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Release notes = the top section of the changelog, minus its own heading.
+          notes=$(awk '/^## \[/{n++; if (n > 1) exit} n == 1' CHANGELOG.md | tail -n +2)
+          gh release create "$TAG" ClaudeStatusBar.app.zip \
+              --title "$TAG" --notes "$notes" \
+            || gh release upload "$TAG" ClaudeStatusBar.app.zip --clobber

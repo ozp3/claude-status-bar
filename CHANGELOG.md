@@ -3,6 +3,39 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.8] - 2026-08-26
+
+### Added
+- **Update from inside the app.** The ⟳ added in 0.5.7 only ever told you an update existed; taking
+  it meant a browser, a download and a drag. Now the row reads `install 0.5.9 →` and one click does
+  the whole thing: it downloads the release's `.app.zip`, unpacks it with `ditto` (which restores the
+  bundle's symlinks and exec bits — plain `unzip` flattens both and leaves an app that won't launch),
+  checks it really is this app at the version promised, then hands the swap to a detached script and
+  quits so the script can replace the bundle and relaunch it. A running bundle can't overwrite itself.
+
+  Nothing installs without that click — there is no silent auto-update and no toggle for one. No
+  Gatekeeper prompt either: quarantine is set on what *you* download in a browser, not on what the
+  app fetches for itself.
+
+  Safety, in order: the destination folder is checked for write access **before** anything is
+  downloaded, so a failure can't land with the app already gone; the new bundle must carry this
+  app's own bundle id and exactly the version the check promised, so a mislabelled or swapped asset
+  is refused and a build that reports the old version can't put the updater in a loop; and the swap
+  moves the old bundle aside rather than deleting it, putting it back if the copy fails — a failed
+  update must never leave you with no app at all. The script logs to
+  `~/.claude/statusbar/update.log`.
+- **Releases are built by CI.** `.github/workflows/release.yml` builds on a `v*` tag push and attaches
+  `ClaudeStatusBar.app.zip` — which is what the in-app updater installs. It refuses to publish when
+  the tag and `build.sh`'s version disagree, because a release whose asset reports a different version
+  would offer itself forever. Free: Actions minutes are unlimited for public repos on standard
+  runners, and `macos-14` is a standard runner.
+
+### Changed
+- **The release asset is a `.app.zip`, not a `.dmg`.** A disk image can't be swapped into place, and
+  building one needs notarization credentials CI doesn't have. The download link and install
+  instructions moved with it. Builds are still ad-hoc signed, so a *browser* download still needs one
+  right-click → Open; in-app updates don't.
+
 ## [0.5.7] - 2026-08-26
 
 ### Added

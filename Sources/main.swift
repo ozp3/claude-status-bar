@@ -252,8 +252,8 @@ final class SessionRowView: NSView {
 // dismisses the menu — the answer would land on a dropdown that had already closed. Deliberately the
 // same shape as UsageHeaderView (one ⟳, one line of transient text) rather than new vocabulary.
 final class VersionRowView: NSView {
-    var onCheck: (() -> Void)?        // ⟳ pressed
-    var onOpenRelease: (() -> Void)?  // the row pressed while an update is on offer
+    var onCheck: (() -> Void)?     // ⟳ pressed
+    var onActivate: (() -> Void)?  // the row pressed while an update is on offer
     private let versionField = NSTextField(labelWithString: "")
     private let statusField = NSTextField(labelWithString: "")
     private let button = NSButton()
@@ -330,11 +330,29 @@ final class VersionRowView: NSView {
         }
     }
 
-    // Sticky, and turns the whole row into a button to the release page.
+    // Sticky, and turns the whole row into the install button.
     func showAvailable(_ version: String) {
         statusGeneration += 1
         actionable = true
-        statusField.stringValue = "\(version) available →"
+        statusField.stringValue = "install \(version) →"
+        setHover(hovered)
+    }
+
+    // Sticky progress ("downloading…", "installing…"), with the spinner running and the row inert
+    // so a second click can't start a second install.
+    func showBusy(_ text: String) {
+        statusGeneration += 1
+        actionable = false
+        button.isHidden = true
+        spinner.startAnimation(nil)
+        statusField.stringValue = text
+        setHover(hovered)
+    }
+
+    func clearStatus() {
+        statusGeneration += 1
+        actionable = false
+        statusField.stringValue = ""
         setHover(hovered)
     }
 
@@ -346,13 +364,12 @@ final class VersionRowView: NSView {
         actionable = false
         statusField.stringValue = ""
         setHover(hovered)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in self?.endSpin(nil) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in self?.endSpin() }
     }
 
-    func endSpin(_ status: String?) {
+    func endSpin() {
         spinner.stopAnimation(nil)
         button.isHidden = false
-        if let status = status { showStatus(status) }
     }
 
     // Custom views don't get the menu's automatic hover highlight, so draw it ourselves.
@@ -377,7 +394,7 @@ final class VersionRowView: NSView {
         super.layout()
         highlightView.frame = bounds.insetBy(dx: 5, dy: 0)
     }
-    override func mouseDown(with event: NSEvent) { if actionable { onOpenRelease?() } }
+    override func mouseDown(with event: NSEvent) { if actionable { onActivate?() } }
 }
 
 final class StatusController: NSObject, NSMenuDelegate {
@@ -708,11 +725,17 @@ final class StatusController: NSObject, NSMenuDelegate {
         // and this is the one path where the user is explicitly asking us to go and look.
         if force { req.cachePolicy = .reloadIgnoringLocalCacheData }
         URLSession.shared.dataTask(with: req) { data, _, _ in
-            var ver: String?
+            var ver: String?, asset: String?
             if let data = data,
                let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let tag = obj["tag_name"] as? String {
                 ver = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+                // The release workflow attaches exactly one .zip: the .app, ditto-archived. A .dmg
+                // (if one is ever attached by hand) is for downloading by hand — it can't be
+                // swapped into place, so the updater ignores it and the row just links out.
+                if let assets = obj["assets"] as? [[String: Any]] {
+                    asset = assets.first { ($0["name"] as? String)?.hasSuffix(".zip") == true }?["browser_download_url"] as? String
+                }
             }
             // Hop to main: the cache is read from there on every menu open, and the completion
             // drives UI. Only a successful check moves the clock, so a failure retries next open.
@@ -720,6 +743,7 @@ final class StatusController: NSObject, NSMenuDelegate {
                 if let ver = ver {
                     d.set(ver, forKey: "latestVersion")
                     d.set(now, forKey: "lastUpdateCheck")
+                    d.set(asset, forKey: "latestAsset")   // persisted: the row is rebuilt on every open
                 }
                 completion?(ver)
             }
@@ -739,6 +763,153 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     @objc func openLatestRelease() {
         if let url = URL(string: releasePageURL) { NSWorkspace.shared.open(url) }
+    }
+
+    // MARK: update install
+
+    // Where the updater has got to. Held on the CONTROLLER, not on the row: the menu can be closed
+    // mid-download, and the next open builds a brand new VersionRowView that has to pick the story
+    // back up where it left off.
+    enum UpdateStage: Equatable {
+        case idle
+        case available(String)   // a newer release, ready to install on a click
+        case working(String)     // downloading / unpacking / installing
+        case failed(String)
+    }
+    var updateStage: UpdateStage = .idle
+    weak var versionRow: VersionRowView?
+
+    func setUpdateStage(_ stage: UpdateStage) {
+        updateStage = stage
+        if let row = versionRow { applyUpdateStage(to: row) }
+    }
+
+    func applyUpdateStage(to row: VersionRowView) {
+        switch updateStage {
+        case .idle:                 row.endSpin(); row.clearStatus()
+        case .available(let v):     row.endSpin(); row.showAvailable(v)
+        case .working(let text):    row.showBusy(text)
+        case .failed(let why):
+            row.endSpin(); row.showStatus(why)
+            // Transient by nature: a stale failure must not greet the next menu open. Fall back to
+            // the update we still know about, if there is one.
+            updateStage = knownAvailable().map(UpdateStage.available) ?? .idle
+        }
+    }
+
+    // The cached tag, but only when it is genuinely ahead of what is running.
+    func knownAvailable() -> String? {
+        guard let latest = UserDefaults.standard.string(forKey: "latestVersion"),
+              versionIsNewer(latest, than: currentVersion) else { return nil }
+        return latest
+    }
+
+    // One click installs. The asset is the .app, ditto-archived by the release workflow: download it,
+    // unpack it, prove it really is us, then hand the swap to a detached script — a bundle can't
+    // replace itself while it's the one running.
+    func installUpdate() {
+        guard case .available(let version) = updateStage,
+              let str = UserDefaults.standard.string(forKey: "latestAsset"), let url = URL(string: str) else {
+            // No installable asset (a release with only a .dmg, say) — fall back to the old behavior.
+            openLatestRelease()
+            return
+        }
+        // Refuse now rather than after we've quit: if the bundle's folder isn't ours to write, the
+        // swap would fail with the app already gone and nothing left to report it.
+        let dest = Bundle.main.bundlePath
+        guard FileManager.default.isWritableFile(atPath: (dest as NSString).deletingLastPathComponent) else {
+            setUpdateStage(.failed("can't write there")); return
+        }
+        setUpdateStage(.working("downloading…"))
+        var req = URLRequest(url: url)
+        req.setValue("ClaudeStatusBar", forHTTPHeaderField: "User-Agent")
+        URLSession.shared.downloadTask(with: req) { [weak self] tmp, resp, _ in
+            guard let self = self else { return }
+            guard let tmp = tmp, (resp as? HTTPURLResponse)?.statusCode == 200 else {
+                DispatchQueue.main.async { self.setUpdateStage(.failed("download failed")) }
+                return
+            }
+            // URLSession deletes the temp file the moment this handler returns, so move it first.
+            let work = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("ClaudeStatusBarUpdate-\(ProcessInfo.processInfo.processIdentifier)")
+            let zip = work.appendingPathComponent("update.zip")
+            let fm = FileManager.default
+            try? fm.removeItem(at: work)
+            do {
+                try fm.createDirectory(at: work, withIntermediateDirectories: true)
+                try fm.moveItem(at: tmp, to: zip)
+            } catch {
+                DispatchQueue.main.async { self.setUpdateStage(.failed("couldn't unpack")) }
+                return
+            }
+            DispatchQueue.main.async { self.setUpdateStage(.working("installing…")) }
+            self.unpackAndSwap(zip: zip, work: work, dest: dest, expecting: version)
+        }.resume()
+    }
+
+    private func unpackAndSwap(zip: URL, work: URL, dest: String, expecting version: String) {
+        let fm = FileManager.default
+        func fail(_ why: String) {
+            try? fm.removeItem(at: work)
+            DispatchQueue.main.async { self.setUpdateStage(.failed(why)) }
+        }
+        // ditto reads what ditto wrote, and restores the bundle's symlinks and exec bits — plain
+        // unzip flattens both and leaves an app that won't launch.
+        let unpack = Process()
+        unpack.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        unpack.arguments = ["-x", "-k", zip.path, work.path]
+        unpack.standardOutput = FileHandle.nullDevice
+        unpack.standardError = FileHandle.nullDevice
+        guard (try? unpack.run()) != nil else { return fail("couldn't unpack") }
+        unpack.waitUntilExit()
+        guard unpack.terminationStatus == 0,
+              let name = (try? fm.contentsOfDirectory(atPath: work.path))?.first(where: { $0.hasSuffix(".app") })
+        else { return fail("couldn't unpack") }
+
+        // The safety gate: only ever replace ourselves WITH ourselves. Same bundle id, and the exact
+        // version the check promised — so a mislabelled or swapped asset can't be installed, and a
+        // build that reports the old version can't put the updater in a loop.
+        let newBundle = work.appendingPathComponent(name)
+        let info = NSDictionary(contentsOf: newBundle.appendingPathComponent("Contents/Info.plist"))
+        guard info?["CFBundleIdentifier"] as? String == Bundle.main.bundleIdentifier,
+              info?["CFBundleShortVersionString"] as? String == version
+        else { return fail("unexpected build") }
+
+        // A running bundle can't overwrite itself, so a detached script waits for us to exit, swaps
+        // the folder, and relaunches. The old bundle is moved aside rather than deleted, and put
+        // back if the copy fails — a failed update must not leave the user with no app at all.
+        let script = work.appendingPathComponent("swap.sh")
+        let log = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/update.log")
+        let body = """
+        #!/bin/sh
+        pid=$1; src=$2; dest=$3; log=$4
+        exec >>"$log" 2>&1
+        echo "--- $(date) install $src -> $dest"
+        n=0
+        while kill -0 "$pid" 2>/dev/null && [ $n -lt 200 ]; do sleep 0.1; n=$((n+1)); done
+        bak="$dest.old-$$"
+        [ -d "$dest" ] && mv "$dest" "$bak"
+        if cp -R "$src" "$dest"; then
+          echo "installed"; rm -rf "$bak"
+        else
+          echo "copy failed - restoring"; rm -rf "$dest"
+          [ -d "$bak" ] && mv "$bak" "$dest"
+        fi
+        open "$dest"
+        rm -rf "$(dirname "$src")"
+        """
+        guard (try? body.write(to: script, atomically: true, encoding: .utf8)) != nil else {
+            return fail("couldn't install")
+        }
+        let swap = Process()
+        swap.executableURL = URL(fileURLWithPath: "/bin/sh")
+        swap.arguments = [script.path, String(ProcessInfo.processInfo.processIdentifier),
+                          newBundle.path, dest, log]
+        guard (try? swap.run()) != nil else { return fail("couldn't install") }
+        DispatchQueue.main.async {
+            // Quit so the script can take the bundle; it reopens us from the new one.
+            NSApp.terminate(nil)
+        }
     }
 
     // MARK: menu
@@ -1066,26 +1237,30 @@ final class StatusController: NSObject, NSMenuDelegate {
         // tracks). Pressing ⟳ answers into this row instead, which is already on screen.
         let vrow = VersionRowView(width: CGFloat(uiConfig()["boxWidth"] ?? 300),
                                   version: currentVersion, tint: brand)
+        versionRow = vrow
         vrow.onCheck = { [weak self, weak vrow] in
             guard let self = self, let vrow = vrow, !self.updateCheckInFlight else { return }
+            if case .working = self.updateStage { return }   // an install is already under way
             self.updateCheckInFlight = true
             vrow.beginSpin()
             self.checkForUpdate(force: true) { [weak self, weak vrow] latest in
                 guard let self = self else { return }
                 self.updateCheckInFlight = false
-                guard let vrow = vrow else { return }
-                vrow.endSpin(nil)
-                guard let latest = latest else { vrow.showStatus("couldn't check"); return }
-                if self.versionIsNewer(latest, than: self.currentVersion) { vrow.showAvailable(latest) }
-                else { vrow.showStatus("up to date") }
+                guard let latest = latest else { self.setUpdateStage(.failed("couldn't check")); return }
+                if self.versionIsNewer(latest, than: self.currentVersion) {
+                    self.setUpdateStage(.available(latest))
+                } else {
+                    self.setUpdateStage(.idle)          // clears the field...
+                    vrow?.showStatus("up to date")      // ...so this transient line has it to itself
+                }
             }
         }
-        vrow.onOpenRelease = { [weak self] in menu.cancelTracking(); self?.openLatestRelease() }
+        vrow.onActivate = { [weak self] in self?.installUpdate() }
         // Seed from the cached tag, so an update the daily check already found is on offer the
-        // moment the menu opens rather than only after you press ⟳.
-        if let latest = UserDefaults.standard.string(forKey: "latestVersion"), versionIsNewer(latest, than: currentVersion) {
-            vrow.showAvailable(latest)
-        }
+        // moment the menu opens rather than only after you press ⟳. An install already under way
+        // keeps its own stage — the menu closing mid-download must not lose the thread.
+        if updateStage == .idle, let latest = knownAvailable() { updateStage = .available(latest) }
+        applyUpdateStage(to: vrow)
         let vitem = NSMenuItem()
         vitem.view = vrow
         menu.addItem(vitem)
