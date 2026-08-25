@@ -42,7 +42,12 @@ Everything is controlled from the menu:
 - **Show usage:** toggle the usage section (off = no usage requests at all).
 - **Open usage log:** one click to the local fetch/rate-limit log.
 - **Show timer:** toggle the elapsed `1m 1s` clock.
-- **Thinking words:** rotate a playful verb (`Manifesting…`, `Percolating…`) in place of `Thinking…`, like Claude Code (on by default).
+- **Label:** what the menu bar prints next to the icon while a session works.
+  - **Off** *(default)*: nothing — the animation already says "busy", and the dropdown says what and where. Widest menu bar savings: `Running command  1m 4s` is ~161pt of title; this is 0.
+  - **Compact**: one SF Symbol standing in for the sentence — terminal for `Bash`, pencil for edits, magnifier for `Grep`/`Glob`, globe for the web tools, `…` while thinking (~22pt).
+  - **Words**: the old behavior — a playful verb (`Manifesting…`, `Percolating…`) like Claude Code while thinking, and the tool label (`Running command`, `Editing`) while a tool runs.
+
+  `Awaiting permission` is deliberately outside this setting: it is the one state that asks something of you, so it keeps its words in every mode.
 - **Animation style:**
   - **Claude Spark**, the web/chat "morph" spark
   - **Claude Code**, the terminal glyph spinner

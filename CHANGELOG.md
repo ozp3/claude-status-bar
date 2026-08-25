@@ -3,6 +3,28 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.6] - 2026-08-26
+
+### Changed
+- **The menu bar no longer narrates.** `Running command`, `Editing`, `Searching web` and the rotating
+  thinking verbs pushed the status item to ~161pt of title, wide enough to shove neighbouring items
+  into the menu bar's overflow chevron on a crowded bar. The **Thinking words** toggle is now a
+  three-way **Label** setting:
+  - **Off** (the new default) — icon only, plus the elapsed clock if **Show timer** is on.
+  - **Compact** — one SF Symbol in place of the sentence: terminal for `Bash`, pencil for
+    `Edit`/`Write`/`MultiEdit`/`NotebookEdit`, document for `Read`, magnifier for `Grep`/`Glob`,
+    globe for `WebFetch`/`WebSearch`, branch for `Task`, checklist for `TodoWrite`, `…` while thinking.
+  - **Words** — exactly what the app did before.
+
+  Upgrades keep their old behavior only if **Thinking words** was explicitly toggled at some point
+  (on → Words, off → Off); everyone else lands on the new default. `Awaiting permission` is outside
+  the setting entirely — it is the one state that asks something of you, so it keeps its words.
+
+### Fixed
+- **A stray leading gap before the elapsed clock.** The title glued the clock to the label with a
+  fixed two-space separator, so an empty label (now the common case) opened the status item with
+  three leading spaces.
+
 ## [0.5.5] - 2026-07-24
 
 ### Added

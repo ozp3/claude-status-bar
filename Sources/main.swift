@@ -266,7 +266,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     var stalePruneAge: TimeInterval { UserDefaults.standard.object(forKey: "hideIdleAfter") as? Double ?? 900 }
 
     struct Session {
-        var id: String, state: String, label: String, project: String, transcript: String
+        var id: String, state: String, label: String, tool: String, project: String, transcript: String
         var cwd: String         // session working directory; "" on pre-upgrade files
         var entrypoint: String  // CLAUDE_CODE_ENTRYPOINT: "cli", "claude-desktop", …
         var termProgram: String // TERM_PROGRAM for CLI sessions: "Apple_Terminal", "iTerm.app", …
@@ -282,6 +282,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             self.id = id
             self.state = o["state"] as? String ?? "idle"
             self.label = o["label"] as? String ?? ""
+            self.tool = o["tool"] as? String ?? ""
             self.project = o["project"] as? String ?? ""
             self.transcript = o["transcript"] as? String ?? ""
             self.cwd = o["cwd"] as? String ?? ""
@@ -296,6 +297,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     var sessions: [String: Session] = [:]  // id -> latest parsed per-session state
     var fileMTimes: [String: Date] = [:]   // "<id>.json" -> last-parsed mtime (re-parse only on change)
     var gitHeadCache: [String: String] = [:]  // cwd -> resolved HEAD path ("" = confirmed non-git)
+    var glyphCache: [String: NSImage] = [:]   // "<symbol>|<isDark>" -> the baked Compact-mode glyph
     var prevState: [String: String] = [:]  // id -> previous raw state per session
     var menuIsOpen = false                  // refresh the dropdown's per-session timers only while open
     var sessionMenuItems: [(item: NSMenuItem, id: String)] = []
@@ -305,6 +307,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     weak var usageHeader: UsageHeaderView?   // for spinner/status feedback; the menu item owns the view
     weak var usageNoteField: NSTextField?    // so the local token re-check can heal the note in place
     var activeBase = ""        // label without the elapsed clock
+    var activeSymbol: String? = nil  // Compact mode: SF Symbol name drawn in place of the label
     var startedAt: Double = 0  // unix seconds the current turn began (0 = no clock)
     var activeColor: NSColor? = nil
 
@@ -326,7 +329,14 @@ final class StatusController: NSObject, NSMenuDelegate {
     // alwaysShow was, so existing installs keep their effective behavior (see init).
     var startAtLogin = true
     var iconSystem = false // false = brand Orange; true = adaptive black/white (template image)
-    var useThinkingWords = true     // rotate a playful verb ("Manifesting…") in place of "Thinking…"
+    // What the menu bar prints next to the animated icon while a session works.
+    //   words   — the old behavior: a rotating verb ("Manifesting…") or the hook's tool label ("Running command")
+    //   compact — one SF Symbol standing in for that sentence (terminal, pencil, magnifier, …)
+    //   off     — nothing at all (default): the animation already says "busy", the dropdown says what and where
+    // "Awaiting permission" is deliberately outside this setting — it is the one state that asks
+    // something of you, so it keeps its words in every mode.
+    enum LabelMode: String { case words, compact, off }
+    var labelMode: LabelMode = .off
     var sessionWord: [String: String] = [:] // id -> current thinking word; re-picked on each entry into "thinking"
     // Claude Code's SPINNER_VERBS, minus the hyphenated/tongue-twister ones. Longest kept is ~14 chars
     // ("Hullaballooing"/"Metamorphosing"); with the timer showing they can get wide in a crowded menu bar.
@@ -392,7 +402,10 @@ final class StatusController: NSObject, NSMenuDelegate {
         // dedicated key has never been written — nobody's login items change under them.
         startAtLogin = d.object(forKey: "startAtLogin") != nil ? d.bool(forKey: "startAtLogin") : alwaysShow
         if d.object(forKey: "iconSystem") != nil { iconSystem = d.bool(forKey: "iconSystem") }
-        if d.object(forKey: "thinkingWords") != nil { useThinkingWords = d.bool(forKey: "thinkingWords") }
+        // Migration: "Thinking words" became a 3-way Label setting in 0.5.6. Only an EXPLICIT
+        // old toggle carries over (on -> Words, off -> Off); everyone else lands on the new default.
+        if let s = d.string(forKey: "labelMode"), let m = LabelMode(rawValue: s) { labelMode = m }
+        else if d.object(forKey: "thinkingWords") != nil { labelMode = d.bool(forKey: "thinkingWords") ? .words : .off }
         if let s = d.string(forKey: "animStyle"), let st = AnimStyle(rawValue: s) { animStyle = st }
         let menu = NSMenu()
         menu.delegate = self
@@ -839,11 +852,17 @@ final class StatusController: NSObject, NSMenuDelegate {
             UserDefaults.standard.set(on, forKey: "showTimer")
             self?.applyTitle()
         })
-        menu.addItem(toggleRow(title: "Thinking words", isOn: useThinkingWords) { [weak self] on in
-            self?.useThinkingWords = on
-            UserDefaults.standard.set(on, forKey: "thinkingWords")
-            self?.evaluate()   // re-render the bar label immediately with/without the rotating word
-        })
+        let labelParent = NSMenuItem(title: "Label", action: nil, keyEquivalent: "")
+        let labelSub = NSMenu()
+        for (mode, name) in [(LabelMode.words, "Words"), (.compact, "Compact"), (.off, "Off")] {
+            let it = NSMenuItem(title: name, action: #selector(chooseLabelMode(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = mode.rawValue
+            it.state = labelMode == mode ? .on : .off
+            labelSub.addItem(it)
+        }
+        labelParent.submenu = labelSub
+        menu.addItem(labelParent)
 
         let animParent = NSMenuItem(title: "Animation", action: nil, keyEquivalent: "")
         let animSub = NSMenu()
@@ -1088,14 +1107,32 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     func workingLabel(_ s: Session) -> String {
-        if useThinkingWords, s.state == "thinking", let w = sessionWord[s.id], !w.isEmpty { return w + "…" }
+        guard labelMode == .words else { return "" }   // compact -> a glyph; off -> nothing
+        if s.state == "thinking", let w = sessionWord[s.id], !w.isEmpty { return w + "…" }
         if !s.label.isEmpty { return s.label }
         return s.state == "tool" ? "Working…" : "Thinking…"
     }
 
+    // Compact mode's stand-in for the label. Keyed off the RAW tool name rather than the hook's
+    // prose ("Running command"), so rewording those strings can never silently break the mapping.
+    func workingSymbol(_ s: Session) -> String? {
+        guard labelMode == .compact else { return nil }
+        guard s.state == "tool" else { return "ellipsis" }
+        switch s.tool {
+        case "Bash":                                      return "terminal"
+        case "Edit", "Write", "MultiEdit", "NotebookEdit": return "pencil"
+        case "Read":                                      return "doc.text"
+        case "Grep", "Glob":                              return "magnifyingglass"
+        case "WebFetch", "WebSearch":                     return "globe"
+        case "Task":                                      return "arrow.triangle.branch"
+        case "TodoWrite":                                 return "checklist"
+        default:                                          return "wrench.and.screwdriver"
+        }
+    }
+
     // Re-pick a word each time a session ENTERS the thinking state (prompt, or a tool->thinking `post`),
     // avoiding an immediate repeat, so a tool round-trip lands a different word. Held steady while the
-    // session stays thinking. Computed regardless of the toggle so flipping it on shows instantly.
+    // session stays thinking. Computed in every Label mode, so switching to Words shows one instantly.
     func updateThinkingWord(_ s: Session) {
         let prev = prevState[s.id] ?? ""
         guard s.state == "thinking", prev != "thinking" else { return }
@@ -1165,6 +1202,13 @@ final class StatusController: NSObject, NSMenuDelegate {
         iconSystem = sys
         UserDefaults.standard.set(iconSystem, forKey: "iconSystem")
         evaluate() // re-render the current state in the new color
+    }
+
+    @objc func chooseLabelMode(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let m = LabelMode(rawValue: raw) else { return }
+        labelMode = m
+        UserDefaults.standard.set(raw, forKey: "labelMode")
+        evaluate()   // re-render the bar title immediately in the new mode
     }
 
     @objc func chooseStyle(_ sender: NSMenuItem) {
@@ -1324,7 +1368,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         case "permission":
             render(label: statusText(lead, eff: lead.eff), color: amber, animate: false, startedAt: 0, dot: true)
         case "thinking", "tool":
-            render(label: statusText(lead, eff: lead.eff), color: iconColor, animate: true, startedAt: lead.startedAt)
+            render(label: statusText(lead, eff: lead.eff), symbol: workingSymbol(lead), color: iconColor, animate: true, startedAt: lead.startedAt)
         default:
             renderResting()
         }
@@ -1475,10 +1519,10 @@ final class StatusController: NSObject, NSMenuDelegate {
         return out
     }
 
-    func render(label: String, color: NSColor?, animate: Bool, startedAt: Double, dot: Bool = false) {
+    func render(label: String, symbol: String? = nil, color: NSColor?, animate: Bool, startedAt: Double, dot: Bool = false) {
         guard let button = statusItem.button else { return }
         if !animate {
-            let key = "\(label)|\(dot)|\(Self.colorKey(color))|\(usageBadgeOn)"
+            let key = "\(label)|\(symbol ?? "")|\(dot)|\(Self.colorKey(color))|\(usageBadgeOn)"
             if key == lastRenderKey, button.image != nil { return }
             lastRenderKey = key
         } else {
@@ -1486,6 +1530,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
         button.contentTintColor = nil // we paint the icon color ourselves; template-tint is unreliable
         activeBase = label
+        activeSymbol = symbol
         activeColor = color
         self.startedAt = startedAt
 
@@ -1519,11 +1564,15 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     func applyTitle() {
         guard let button = statusItem.button else { return }
+        let clock = (showTimer && startedAt > 0)
+            ? elapsed(max(0, Int(Date().timeIntervalSince1970 - startedAt))) : ""
+        // Outside Words mode the base label is empty, so the clock has to supply its own start —
+        // appending "  " + clock unconditionally would open the title with stray spaces.
         var text = activeBase
-        if showTimer, startedAt > 0 {
-            text += "  " + elapsed(max(0, Int(Date().timeIntervalSince1970 - startedAt)))
-        }
-        if text.isEmpty {
+        if !clock.isEmpty { text = text.isEmpty ? clock : text + "  " + clock }
+        let glyph = activeSymbol.flatMap(statusGlyph)
+
+        if text.isEmpty, glyph == nil {
             button.imagePosition = .imageOnly
             button.attributedTitle = NSAttributedString(string: "")
             return
@@ -1531,11 +1580,44 @@ final class StatusController: NSObject, NSMenuDelegate {
         button.imagePosition = .imageLeading
         // labelColor adapts: white on a dark menu bar, black on a light one. Monospaced
         // digits keep the elapsed clock from nudging neighboring menu bar icons.
-        let attrs: [NSAttributedString.Key: Any] = [
-            .foregroundColor: NSColor.labelColor,
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 0, weight: .regular),
-        ]
-        button.attributedTitle = NSAttributedString(string: " \(text)", attributes: attrs)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 0, weight: .regular)
+        let attrs: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.labelColor, .font: font]
+        let title = NSMutableAttributedString(string: " ", attributes: attrs)
+        if let glyph = glyph {
+            let att = NSTextAttachment()
+            att.image = glyph
+            // Optically centered on the cap height rather than sat on the baseline, so the glyph
+            // lines up with the digits of the clock beside it.
+            att.bounds = NSRect(x: 0, y: (font.capHeight - glyph.size.height) / 2,
+                                width: glyph.size.width, height: glyph.size.height)
+            title.append(NSAttributedString(attachment: att))
+            if !text.isEmpty { title.append(NSAttributedString(string: "  ", attributes: attrs)) }
+        }
+        if !text.isEmpty { title.append(NSAttributedString(string: text, attributes: attrs)) }
+        button.attributedTitle = title
+    }
+
+    // Compact mode's glyph: an SF Symbol baked flat in the menu bar's label color. Baked rather than
+    // left as a template because a text attachment ignores .foregroundColor — and the menu bar's
+    // light/dark is its own, so the cache keys on it and a theme flip repaints on the next frame.
+    func statusGlyph(_ name: String) -> NSImage? {
+        let dark = (statusItem.button?.effectiveAppearance ?? NSApp.effectiveAppearance)
+            .bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let key = "\(name)|\(dark)"
+        if let cached = glyphCache[key] { return cached }
+        let pt = NSFont.monospacedDigitSystemFont(ofSize: 0, weight: .regular).pointSize
+        guard let sym = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: pt, weight: .regular))
+        else { return nil }
+        let fg = NSColor(white: dark ? 1 : 0, alpha: 0.9)   // labelColor's weight, resolved by hand
+        let out = NSImage(size: sym.size, flipped: false) { rect in
+            sym.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+            fg.setFill()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
+        glyphCache[key] = out
+        return out
     }
 
     // MARK: icon
