@@ -22,7 +22,7 @@ jobs:
     env:
       TAG: ${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # A release whose asset reports a different version than its tag would make the in-app updater
       # loop forever: it would install the "new" build, still read the old version, and offer it
