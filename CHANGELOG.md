@@ -3,6 +3,25 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.9] - 2026-09-06
+
+### Fixed
+- **A `brew upgrade node` silently killed every hook.** The installer baked `process.execPath` into
+  `settings.json` — and that is the *realpath* of whatever node is running it, which under Homebrew
+  means `/opt/homebrew/Cellar/node/<version>/bin/node`. Upgrading node deletes that directory, so
+  from the next upgrade on, every hook failed to launch: no state files were written, so the dropdown
+  showed no sessions and the icon never animated, with nothing on screen to explain it. The installer
+  now records a **stable, version-free** path (`/opt/homebrew/bin/node` and friends — the same list
+  the app's own `locateNode` walks), verified to actually run rather than merely exist, since a
+  dangling symlink passes an existence check and fails every hook.
+
+### Added
+- **The app repairs its own hooks.** `ensureHooksInstalled()` used to re-run only when the app
+  version changed. It now also re-runs whenever the node path recorded in `settings.json` no longer
+  exists — checked on launch *and* on every menu open, because node can move under an already-running
+  app, which is exactly the case that stranded the dropdown. One small file read; one reinstall at a
+  time however often it is asked.
+
 ## [0.5.8] - 2026-08-26
 
 ### Added

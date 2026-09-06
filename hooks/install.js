@@ -14,7 +14,38 @@ const MARKER = sbDir; // every hook command we add points inside this dir
 const updateDest = path.join(sbDir, "update.js");
 const lifecycleDest = path.join(sbDir, "lifecycle.js");
 const settingsPath = path.join(home, ".claude", "settings.json");
-const node = process.execPath;
+// The node path is baked into settings.json as an ABSOLUTE path, so it has to be one that survives
+// a runtime upgrade. process.execPath is the realpath of whatever is running us, which under Homebrew
+// is /opt/homebrew/Cellar/node/<version>/bin/node — a directory `brew upgrade node` deletes. Every
+// hook then fails silently: no state files get written, so no sessions and no animation, with nothing
+// on screen to say why. Prefer the stable, version-free locations (the same list the app's own
+// locateNode walks) and fall back to execPath only when none of them work.
+function stableNode() {
+  const candidates = [
+    "/opt/homebrew/bin/node",
+    "/usr/local/bin/node",
+    "/usr/bin/node",
+    path.join(home, ".volta", "bin", "node"),
+    path.join(home, ".asdf", "shims", "node"),
+    path.join(home, ".local", "bin", "node"),
+  ];
+  // nvm keeps every runtime in a version-named directory, so these are a last resort: they break on
+  // an upgrade the same way Cellar does, but they may be the only node on the machine.
+  const nvmDir = path.join(home, ".nvm", "versions", "node");
+  try {
+    for (const v of fs.readdirSync(nvmDir).sort().reverse()) candidates.push(path.join(nvmDir, v, "bin", "node"));
+  } catch {}
+  for (const c of candidates) {
+    try {
+      fs.accessSync(c, fs.constants.X_OK);
+      // Prove it actually runs: a dangling symlink passes an existence check and fails every hook.
+      cp.execFileSync(c, ["--version"], { stdio: "ignore", timeout: 5000 });
+      return c;
+    } catch {}
+  }
+  return process.execPath;
+}
+const node = stableNode();
 
 // Retire the old 0.0.2 background watcher LaunchAgent on upgrade (0.0.3+ self-quits).
 const OLD_AGENT_LABEL = "com.local.claudestatusbar.watcher";

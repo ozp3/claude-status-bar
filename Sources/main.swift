@@ -459,6 +459,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     var prevState: [String: String] = [:]  // id -> previous raw state per session
     var menuIsOpen = false                  // refresh the dropdown's per-session timers only while open
     var updateCheckInFlight = false         // one manual update check at a time, however hard ⟳ is pressed
+    var hookRepairInFlight = false          // one hook reinstall at a time; the menu can ask on every open
     var sessionMenuItems: [(item: NSMenuItem, id: String)] = []
     let usage = UsageMonitor()
     var usageRowViews: [UsageRowView] = []   // kept so a fetch landing mid-open can redraw in place
@@ -651,9 +652,17 @@ final class StatusController: NSObject, NSMenuDelegate {
     func ensureHooksInstalled() {
         let d = UserDefaults.standard
         let current = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? ""
-        guard d.string(forKey: "installedVersion") != current,
+        // Re-run on a version change, and ALSO whenever the installed hooks have gone stale. The node
+        // path in settings.json is absolute, so a `brew upgrade node` (which deletes the Cellar
+        // directory it points into) or an nvm switch silently kills every one of them: no state files
+        // get written, so the dropdown empties and the icon stops animating — with nothing on screen
+        // to say why. Healing it ourselves beats leaving someone to guess.
+        guard !hookRepairInFlight,
               let installer = Bundle.main.path(forResource: "install", ofType: "js") else { return }
+        guard d.string(forKey: "installedVersion") != current || hooksAreBroken() else { return }
+        hookRepairInFlight = true
         DispatchQueue.global().async {
+            defer { DispatchQueue.main.async { self.hookRepairInFlight = false } }
             guard let node = Self.locateNode() else {
                 NSLog("ClaudeStatusBar: could not find node; hooks not installed (will retry next launch)")
                 return
@@ -667,6 +676,27 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
     }
 
+    // Do our hooks in settings.json still name a node that exists? One small file read, so it is
+    // cheap enough to ask on every launch and every menu open.
+    func hooksAreBroken() -> Bool {
+        let home = NSHomeDirectory() as NSString
+        let marker = home.appendingPathComponent(".claude/statusbar")
+        guard let data = FileManager.default.contents(atPath: home.appendingPathComponent(".claude/settings.json")),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let hooks = json["hooks"] as? [String: Any] else { return false }   // nothing installed yet
+        for (_, value) in hooks {
+            for entry in (value as? [[String: Any]] ?? []) {
+                for hook in (entry["hooks"] as? [[String: Any]] ?? []) {
+                    guard let cmd = hook["command"] as? String, cmd.contains(marker) else { continue }
+                    // The command is "<node> <script> <event>"; the interpreter is the leading field.
+                    let exe = String(cmd.prefix(while: { $0 != " " }))
+                    if !FileManager.default.isExecutableFile(atPath: exe) { return true }
+                }
+            }
+        }
+        return false
+    }
+
     // `/bin/zsh -lc node` saw only the login PATH, missing nvm/fnm set in .zshrc.
     static func locateNode() -> String? {
         let fm = FileManager.default
@@ -677,6 +707,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             "/usr/bin/node",
             "\(home)/.volta/bin/node",
             "\(home)/.asdf/shims/node",
+            "\(home)/.local/bin/node",
         ]
         let nvmDir = "\(home)/.nvm/versions/node"
         if let versions = try? fm.contentsOfDirectory(atPath: nvmDir) {
@@ -1039,6 +1070,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         checkForUpdate() // refreshes the update cache for next open (gated to once a day)
+        ensureHooksInstalled()  // node can move under a running app; heal without waiting for a relaunch
 
         // Branches otherwise refresh only on hook events, so re-read on open (one tiny file read per
         // session) to catch a checkout made while a session sat idle.

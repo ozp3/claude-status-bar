@@ -16,6 +16,25 @@
 - Confirm it's running with `pgrep -x ClaudeStatusBar`: a number means it's running (it may just be hidden), no output means it exited because no Claude session is active.
 - If first-launch setup never took, run the installer manually: `node "/Applications/ClaudeStatusBar.app/Contents/Resources/install.js"`
 
+**Sessions vanished and the icon stopped animating, all at once?** Almost always a moved node. The
+hooks are registered in `~/.claude/settings.json` with an absolute path to node, and upgrading your
+runtime can delete the directory that path points into — `brew upgrade node` retires
+`/opt/homebrew/Cellar/node/<old version>/`, and switching versions under nvm does the same. Every
+hook then fails to launch, so no state files are written and the app has nothing to show. Since
+0.5.9 the app notices and repairs itself, on launch and on every menu open, and the installer now
+records a stable path that survives upgrades. If you're on an older build, either update or re-run
+the installer by hand:
+
+```
+node "/Applications/ClaudeStatusBar.app/Contents/Resources/install.js"
+```
+
+To confirm this is what you're hitting, check that the node in your hooks still exists:
+
+```
+grep -o '"command": "[^ ]*' ~/.claude/settings.json | sort -u
+```
+
 **Seeing 2 icons?** The desktop app shows its own menu bar icon (the quick-screenshot one). To avoid two icons sitting side by side, open Claude's **Settings → General** and turn that built-in menu bar item off.
 
 ---
