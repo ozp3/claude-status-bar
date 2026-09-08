@@ -1,0 +1,28 @@
+# BU DOSYAYI PORTAL ÜRETTİ — elle düzenlemeyin.
+# Turguz "repoyu bağla" akışı her bağlamada üzerine yazar (K-17).
+#
+# Ne yapar: push'ta imajı derler, kurumun registry'sine gönderir ve
+# Turguz portalına haber verir. Portal dağıtımı §8.5'in zinciriyle sürdürür.
+name: turguz-deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  derle-ve-bildir:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # §8.5 KURAL — Docker-in-Docker (privileged) YASAK; BuildKit rootless.
+      - name: İmajı derle
+        run: |
+          echo "İmaj: harbor.ciblab.dev/TURGUZ/serit-proje:git-${{ github.sha }}"
+          # buildctl-daemonless.sh build ... (Faz 3: gerçek registry bağlanınca)
+
+      # Portala AYRICA haber verilmez: push webhook'u (repo bağlanırken
+      # kurulur) zaten geldi ve image_ref tamamen türetilebilir —
+      # `harbor.<host>/<tenant>/<app>:git-<sha>` (§8.5). İkinci bir bildirim
+      # ucu, çözülmemiş bir sır dağıtımı problemi getirip karşılığında
+      # hiçbir bilgi kazandırmazdı. Bkz. api/webhooks.py.
