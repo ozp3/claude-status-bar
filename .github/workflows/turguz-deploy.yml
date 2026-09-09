@@ -18,7 +18,7 @@ jobs:
       # §8.5 KURAL — Docker-in-Docker (privileged) YASAK; BuildKit rootless.
       - name: İmajı derle
         run: |
-          echo "İmaj: harbor.ciblab.dev/TURGUZ/serit-proje:git-${{ github.sha }}"
+          echo "İmaj: harbor.ciblab.dev/TURGUZ/olcum:git-${{ github.sha }}"
           # buildctl-daemonless.sh build ... (Faz 3: gerçek registry bağlanınca)
 
       # Portala AYRICA haber verilmez: push webhook'u (repo bağlanırken
